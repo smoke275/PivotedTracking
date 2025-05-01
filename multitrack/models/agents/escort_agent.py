@@ -18,21 +18,30 @@ from multitrack.utils.vision import is_agent_in_vision_cone, get_vision_cone_poi
 from multitrack.utils.config import *
 
 class FollowerAgent:
-    def __init__(self, initial_state=None, target_distance=FOLLOWER_TARGET_DISTANCE):
+    def __init__(self, initial_state=None, target_distance=FOLLOWER_TARGET_DISTANCE, 
+                 search_duration=FOLLOWER_SEARCH_DURATION, walls=None, doors=None):
         """
         Follower agent that uses an MPPI controller to follow a target
         
         Parameters:
         - initial_state: [x, y, theta, v] or None for random initialization
         - target_distance: Desired following distance
+        - search_duration: Frames to continue searching after losing sight of target
+        - walls: List of wall rectangles for valid position checking
+        - doors: List of door rectangles for valid position checking
         """
         # Initialize state
         if initial_state is None:
-            # Random initialization away from the center
-            x = np.random.uniform(WIDTH * 0.2, WIDTH * 0.8)
-            y = np.random.uniform(HEIGHT * 0.2, HEIGHT * 0.8)
-            theta = np.random.uniform(-pi, pi)
-            self.state = np.array([x, y, theta, 0.0])
+            # Position initialization with obstacle awareness
+            if walls is not None:
+                # Find a valid position that doesn't collide with walls
+                self.state = self._find_valid_position(walls, doors)
+            else:
+                # Fallback to random initialization away from the center
+                x = np.random.uniform(WIDTH * 0.2, WIDTH * 0.8)
+                y = np.random.uniform(HEIGHT * 0.2, HEIGHT * 0.8)
+                theta = np.random.uniform(-pi, pi)
+                self.state = np.array([x, y, theta, 0.0])
         else:
             self.state = initial_state.copy()
         
@@ -62,11 +71,77 @@ class FollowerAgent:
         self.last_seen_position = None
         self.search_mode = False
         self.search_timer = 0
-        self.search_duration = 100  # Frames to continue searching
+        self.search_duration = search_duration  # Now using the config value
         self.vision_cone_points = []  # Store vision cone for visualization
         
         # Manual control mode
         self.manual_mode = False
+    
+    def _find_valid_position(self, walls, doors=None):
+        """Find a valid position that doesn't collide with walls"""
+        if doors is None:
+            doors = []
+        
+        # Define safe areas (room centers) to try first
+        # These positions are roughly the centers of different rooms
+        # Use different positions than visitor to avoid starting together
+        safe_positions = [
+            (WIDTH * 0.60, HEIGHT * 0.60),    # Lower right of original house
+            (WIDTH * 0.25, HEIGHT * 0.15),    # Bedroom
+            (WIDTH * 0.80, HEIGHT * 0.15),    # Dining Room
+            (WIDTH * 0.15, HEIGHT * 0.40),    # Living Room
+            (WIDTH * 0.85, HEIGHT * 0.60),    # Library area
+            (WIDTH * 0.30, HEIGHT * 0.80),    # Lower left area
+            (WIDTH * 0.85, HEIGHT * 0.30),    # Game room
+            (WIDTH * 0.85, HEIGHT * 0.80),    # Storage area
+        ]
+        
+        # Try safe positions first
+        for pos in safe_positions:
+            agent_rect = pygame.Rect(
+                int(pos[0]) - 10,  # x
+                int(pos[1]) - 10,  # y
+                20, 20  # width, height (agent size)
+            )
+            
+            # Check if position is valid
+            if self._is_valid_position(agent_rect, walls, doors):
+                return np.array([pos[0], pos[1], 0.0, 0.0])
+        
+        # Fall back to random positions if safe positions fail
+        max_attempts = 100
+        for _ in range(max_attempts):
+            # Generate random position within screen bounds with padding
+            x = np.random.uniform(30, WIDTH - 30)
+            y = np.random.uniform(30, HEIGHT - 30)
+            
+            agent_rect = pygame.Rect(
+                int(x) - 10,  # x
+                int(y) - 10,  # y
+                20, 20  # width, height (agent size)
+            )
+            
+            # Check if position is valid
+            if self._is_valid_position(agent_rect, walls, doors):
+                return np.array([x, y, 0.0, 0.0])
+        
+        # If all attempts fail, default to a reasonable position (might be a wall)
+        return np.array([WIDTH - 100, HEIGHT - 100, 0.0, 0.0])
+    
+    def _is_valid_position(self, agent_rect, walls, doors):
+        """Check if a position is valid (not colliding with walls)"""
+        for wall in walls:
+            if agent_rect.colliderect(wall):
+                # Check if we're in a door
+                in_door = False
+                for door in doors:
+                    if agent_rect.colliderect(door):
+                        in_door = True
+                        break
+                
+                if not in_door:
+                    return False
+        return True
     
     def set_manual_controls(self, linear_vel, angular_vel):
         """
@@ -107,7 +182,8 @@ class FollowerAgent:
             )
         
         # Check if leader is visible
-        leader = type('Leader', (), {'state': leader_state})  # Create simple object with state attribute
+        # Create simple object with state attribute and add noisy_position attribute
+        leader = type('Leader', (), {'state': leader_state, 'noisy_position': leader_state})
         target_visible = is_agent_in_vision_cone(
             self, leader, self.vision_range, self.vision_angle, walls, doors
         )

@@ -14,6 +14,7 @@ from multitrack.visualizations.enhanced_rendering import (
     draw_enhanced_agent, generate_particles, update_particles, draw_particles
 )
 from multitrack.utils.config import *
+from multitrack.utils.vision import is_agent_in_vision_cone
 
 # Initialize pygame
 pygame.init()
@@ -51,11 +52,18 @@ def run_simulation():
     # Monitoring options
     global SHOW_PREDICTIONS, SHOW_UNCERTAINTY, SHOW_MPPI_PREDICTIONS, FOLLOWER_ENABLED
     
-    model = UnicycleModel()
-    follower = FollowerAgent(target_distance=100.0) if FOLLOWER_ENABLED else None
-    
     # Create environment
     environment = SimulationEnvironment(width=WIDTH, height=HEIGHT)
+    
+    # Initialize models with environment information to ensure valid starting positions
+    model = UnicycleModel(walls=environment.get_all_walls(), doors=environment.get_doors())
+    
+    if FOLLOWER_ENABLED:
+        follower = FollowerAgent(target_distance=100.0, 
+                               walls=environment.get_all_walls(), 
+                               doors=environment.get_doors())
+    else:
+        follower = None
     
     # Display options
     show_fps = True
@@ -77,6 +85,10 @@ def run_simulation():
     # Follower control mode
     manual_escort_control = False
     
+    # Key debugging
+    key_debug = False  # Toggle for key debugging display on screen
+    debug_key_messages = False  # Toggle for key debug messages in console
+    
     running = True
     while running:
         frame_start_time = pygame.time.get_ticks()
@@ -85,6 +97,10 @@ def run_simulation():
             if event.type == pygame.QUIT:
                 running = False
             elif event.type == pygame.KEYDOWN:
+                # Print which key was pressed for debugging (only if debug_key_messages is True)
+                if debug_key_messages:
+                    print(f"Key pressed: {pygame.key.name(event.key)} (keycode: {event.key})")
+                
                 if event.key == pygame.K_ESCAPE:
                     running = False
                 elif event.key == pygame.K_f:
@@ -92,12 +108,18 @@ def run_simulation():
                 elif event.key == pygame.K_k:
                     # Toggle Kalman filter prediction display
                     SHOW_PREDICTIONS = not SHOW_PREDICTIONS
+                    if debug_key_messages:
+                        print(f"Kalman filter predictions {'enabled' if SHOW_PREDICTIONS else 'disabled'}")
                 elif event.key == pygame.K_u:
                     # Toggle uncertainty ellipse display
                     SHOW_UNCERTAINTY = not SHOW_UNCERTAINTY
+                    if debug_key_messages:
+                        print(f"Uncertainty ellipses {'enabled' if SHOW_UNCERTAINTY else 'disabled'}")
                 elif event.key == pygame.K_m:
                     # Toggle MPPI predictions display
                     SHOW_MPPI_PREDICTIONS = not SHOW_MPPI_PREDICTIONS
+                    if debug_key_messages:
+                        print(f"MPPI predictions {'enabled' if SHOW_MPPI_PREDICTIONS else 'disabled'}")
                 elif event.key == pygame.K_t:
                     # Toggle follower agent
                     FOLLOWER_ENABLED = not FOLLOWER_ENABLED
@@ -110,23 +132,33 @@ def run_simulation():
                     if pygame.key.get_mods() & pygame.KMOD_SHIFT:
                         # Increase measurement frequency (decrease interval)
                         new_interval = model.adjust_measurement_interval(-0.1)
-                        print(f"Measurement interval decreased to {new_interval:.1f}s")
+                        if debug_key_messages:
+                            print(f"Measurement interval decreased to {new_interval:.1f}s")
                     elif follower:
                         # Increase following distance
                         follower.target_distance = min(FOLLOWER_MAX_DISTANCE, follower.target_distance + 10)
+                        if debug_key_messages:
+                            print(f"Follower distance increased to {follower.target_distance}")
                 elif event.key == pygame.K_MINUS:
                     # For measurement rate control with Shift, follower distance without
                     if pygame.key.get_mods() & pygame.KMOD_SHIFT:
                         # Decrease measurement frequency (increase interval)
                         new_interval = model.adjust_measurement_interval(0.1)
-                        print(f"Measurement interval increased to {new_interval:.1f}s")
+                        if debug_key_messages:
+                            print(f"Measurement interval increased to {new_interval:.1f}s")
                     elif follower:
                         # Decrease following distance
                         follower.target_distance = max(FOLLOWER_MIN_DISTANCE, follower.target_distance - 10)
+                        if debug_key_messages:
+                            print(f"Follower distance decreased to {follower.target_distance}")
                 elif event.key == pygame.K_r:
                     # Reset follower position (random)
                     if follower:
-                        follower = FollowerAgent(target_distance=follower.target_distance)
+                        follower = FollowerAgent(
+                            target_distance=follower.target_distance,
+                            walls=environment.get_all_walls(), 
+                            doors=environment.get_doors()
+                        )
                 elif event.key == pygame.K_d:
                     # Toggle debug mode
                     debug_mode = not debug_mode
@@ -138,9 +170,27 @@ def run_simulation():
                     if follower:
                         manual_escort_control = not manual_escort_control
                         follower.set_auto_mode(not manual_escort_control)
+                elif event.key == pygame.K_h:
+                    # Toggle key debugging on screen
+                    key_debug = not key_debug
+                    if debug_key_messages:
+                        print(f"Key debugging display {'enabled' if key_debug else 'disabled'}")
+                elif event.key == pygame.K_j:
+                    # Toggle debug key messages in console
+                    debug_key_messages = not debug_key_messages
+                    print(f"Key message debugging {'enabled' if debug_key_messages else 'disabled'}")
         
         # Get keyboard input to control the unicycle
         keys = pygame.key.get_pressed()
+        
+        # Debug key states - print which arrow keys are pressed (only if debug_key_messages is True)
+        if debug_key_messages and (keys[pygame.K_UP] or keys[pygame.K_DOWN] or keys[pygame.K_LEFT] or keys[pygame.K_RIGHT]):
+            print(f"Active arrow keys: UP={keys[pygame.K_UP]} DOWN={keys[pygame.K_DOWN]} LEFT={keys[pygame.K_LEFT]} RIGHT={keys[pygame.K_RIGHT]}")
+        
+        # Debug WASD keys when in manual escort control (only if debug_key_messages is True)
+        if debug_key_messages and manual_escort_control and (keys[pygame.K_w] or keys[pygame.K_a] or keys[pygame.K_s] or keys[pygame.K_d]):
+            print(f"Active WASD keys: W={keys[pygame.K_w]} A={keys[pygame.K_a]} S={keys[pygame.K_s]} D={keys[pygame.K_d]}")
+            
         linear_vel = 0
         angular_vel = 0
         
@@ -175,21 +225,86 @@ def run_simulation():
         # Calculate elapsed time in seconds
         elapsed_time = (pygame.time.get_ticks() - start_time_ms) / 1000.0
         
+        # Determine if visitor is visible to the escort agent
+        is_visitor_visible = False
+        if follower:
+            # First, create a proper leader object with both state and noisy_position
+            # IMPORTANT FIX: Pass the actual noisy position, not the Kalman estimate!
+            leader = type('Leader', (), {
+                'state': model.state,  # True state (red circle)
+                'noisy_position': model.noisy_position  # Noisy measurement (what would be detected)
+            })
+            
+            # Check if the noisy measurement (not the Kalman estimate) is in the vision cone
+            is_visitor_visible = is_agent_in_vision_cone(
+                observer=follower,
+                target=leader,
+                vision_range=DEFAULT_VISION_RANGE,
+                vision_angle=VISION_ANGLE,
+                walls=environment.get_all_walls(),
+                doors=environment.get_doors()
+            )
+        
         # Update model with elapsed time for Kalman filter timing
         model.update(elapsed_time=elapsed_time, 
                      walls=environment.get_all_walls(),
-                     doors=environment.get_doors())
+                     doors=environment.get_doors(),
+                     is_visible=is_visitor_visible)  # Pass visibility information
         
         # Update follower agent
         if follower:
-            # Use Kalman filter estimate instead of actual state
-            kalman_state = np.array([
-                model.kalman_filter.state[0],  # x from Kalman filter
-                model.kalman_filter.state[1],  # y from Kalman filter
-                model.kalman_filter.state[2],  # theta from Kalman filter
-                model.state[3]                 # v (keep original velocity)
+            # IMPORTANT FIX: Use noisy measurement instead of Kalman filter estimate
+            # The escort should only be able to track what it can actually sense (the magenta dot)
+            noisy_measurement = np.array([
+                model.noisy_position[0],  # x from noisy measurement
+                model.noisy_position[1],  # y from noisy measurement
+                model.noisy_position[2],  # theta from noisy measurement
+                model.state[3]            # v (keep original velocity)
             ])
-            follower.update(dt=0.1, leader_state=kalman_state,
+            
+            # Only use the measurement if the visitor is visible, otherwise use last known position
+            if is_visitor_visible:
+                tracking_state = noisy_measurement
+                
+                # If visitor was previously lost and is now found again, update the info panel
+                if follower.search_timer >= follower.search_duration:
+                    info_text.append("Visitor found! Kalman filter reactivated with new measurement.")
+            else:
+                # If not visible, use the Kalman estimate as best guess of where visitor might be,
+                # but ONLY if the Kalman filter is still active (not reset)
+                if model.kalman_filter_active:
+                    tracking_state = np.array([
+                        model.kalman_filter.state[0],  # x from Kalman filter
+                        model.kalman_filter.state[1],  # y from Kalman filter
+                        model.kalman_filter.state[2],  # theta from Kalman filter
+                        model.state[3]                 # v (keep original velocity)
+                    ])
+                else:
+                    # If Kalman filter has been deactivated, MPPI has no position estimate to use
+                    # Just use the last known position from the follower's memory
+                    if follower.last_seen_position is not None:
+                        # Use last seen position with default orientation
+                        tracking_state = np.array([
+                            follower.last_seen_position[0],  # x from last seen position
+                            follower.last_seen_position[1],  # y from last seen position
+                            follower.state[2],              # Use escort's current orientation
+                            0.0                             # Zero velocity (unknown)
+                        ])
+                    else:
+                        # If no history at all, just use the escort's current position (shouldn't happen)
+                        tracking_state = follower.state.copy()
+                
+                # Check if search duration has just expired or continues to be expired
+                # This ensures the Kalman filter is reset and stays reset during extended periods without sight
+                if follower.search_timer >= follower.search_duration:
+                    # Only print message when first crossing the threshold
+                    if follower.search_timer == follower.search_duration:
+                        print("Search duration expired. Kalman filter reset and deactivated.")
+                    
+                    # Reset and deactivate the Kalman filter when search duration expires or continues to be expired
+                    model.reset_kalman_filter()
+            
+            follower.update(dt=0.1, leader_state=tracking_state,
                           walls=environment.get_all_walls(),
                           doors=environment.get_doors())
         
@@ -296,6 +411,27 @@ def run_simulation():
         title_text = "Visitor with Escort Simulation"
         title = font.render(title_text, True, WHITE)
         screen.blit(title, (WIDTH//2 - title.get_width()//2, 10))
+        
+        # Display key state monitoring if enabled
+        if key_debug:
+            key_monitor_text = [
+                "KEY STATE MONITOR:",
+                f"Arrow keys: UP={keys[pygame.K_UP]} DOWN={keys[pygame.K_DOWN]} LEFT={keys[pygame.K_LEFT]} RIGHT={keys[pygame.K_RIGHT]}",
+                f"WASD keys: W={keys[pygame.K_w]} A={keys[pygame.K_a]} S={keys[pygame.K_s]} D={keys[pygame.K_d]}",
+                f"Function keys: K={keys[pygame.K_k]} U={keys[pygame.K_u]} T={keys[pygame.K_t]} M={keys[pygame.K_m]} C={keys[pygame.K_c]} V={keys[pygame.K_v]} F={keys[pygame.K_f]}",
+                f"Special keys: PLUS={keys[pygame.K_PLUS]} EQUALS={keys[pygame.K_EQUALS]} MINUS={keys[pygame.K_MINUS]} SHIFT={bool(pygame.key.get_mods() & pygame.KMOD_SHIFT)}"
+            ]
+            
+            # Draw background for key monitor
+            key_bg = pygame.Surface((400, 120))
+            key_bg.fill((50, 50, 50))
+            key_bg.set_alpha(200)
+            screen.blit(key_bg, (20, 20))
+            
+            # Display key state text
+            for i, text in enumerate(key_monitor_text):
+                key_text = font.render(text, True, (255, 255, 255))
+                screen.blit(key_text, (30, 30 + i*20))
         
         # Update display
         pygame.display.flip()

@@ -29,4 +29,7 @@ if __name__ == "__main__":
     sim_HEIGHT = args.height
     
     print(f"Starting MultiTrack simulation with screen size {args.width}x{args.height}...")
+    print("Note: The Kalman filter (green circle) updates with control information even when the visitor is out of sight.")
+    print("      This is not realistic behavior and should be fixed by modifying visitor_agent.py to prevent control updates")
+    print("      when is_visible=False. Currently the escort knows which way the visitor is moving even without seeing it.")
     run_simulation()
