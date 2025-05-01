@@ -129,9 +129,9 @@ def run_simulation():
                         follower = None
                 elif event.key == pygame.K_EQUALS or event.key == pygame.K_PLUS:
                     # For measurement rate control with Shift, follower distance without
-                    if pygame.key.get_mods() & pygame.KMOD_SHIFT:
+                    if pygame.key.get_mods() & pygame.KMOD_SHIFT and follower:
                         # Increase measurement frequency (decrease interval)
-                        new_interval = model.adjust_measurement_interval(-0.1)
+                        new_interval = follower.adjust_measurement_interval(-0.1)
                         if debug_key_messages:
                             print(f"Measurement interval decreased to {new_interval:.1f}s")
                     elif follower:
@@ -141,9 +141,9 @@ def run_simulation():
                             print(f"Follower distance increased to {follower.target_distance}")
                 elif event.key == pygame.K_MINUS:
                     # For measurement rate control with Shift, follower distance without
-                    if pygame.key.get_mods() & pygame.KMOD_SHIFT:
+                    if pygame.key.get_mods() & pygame.KMOD_SHIFT and follower:
                         # Decrease measurement frequency (increase interval)
-                        new_interval = model.adjust_measurement_interval(0.1)
+                        new_interval = follower.adjust_measurement_interval(0.1)
                         if debug_key_messages:
                             print(f"Measurement interval increased to {new_interval:.1f}s")
                     elif follower:
@@ -229,7 +229,6 @@ def run_simulation():
         is_visitor_visible = False
         if follower:
             # First, create a proper leader object with both state and noisy_position
-            # IMPORTANT FIX: Pass the actual noisy position, not the Kalman estimate!
             leader = type('Leader', (), {
                 'state': model.state,  # True state (red circle)
                 'noisy_position': model.noisy_position  # Noisy measurement (what would be detected)
@@ -245,26 +244,29 @@ def run_simulation():
                 doors=environment.get_doors()
             )
         
-        # Update model with elapsed time for Kalman filter timing
+        # Update model with elapsed time - no Kalman filter here anymore
         model.update(elapsed_time=elapsed_time, 
                      walls=environment.get_all_walls(),
                      doors=environment.get_doors(),
-                     is_visible=is_visitor_visible)  # Pass visibility information
+                     is_visible=is_visitor_visible)
         
-        # Update follower agent
+        # Update follower agent with Kalman filter
         if follower:
-            # IMPORTANT FIX: Use noisy measurement instead of Kalman filter estimate
-            # The escort should only be able to track what it can actually sense (the magenta dot)
-            noisy_measurement = np.array([
-                model.noisy_position[0],  # x from noisy measurement
-                model.noisy_position[1],  # y from noisy measurement
-                model.noisy_position[2],  # theta from noisy measurement
-                model.state[3]            # v (keep original velocity)
-            ])
+            # Get the noisy measurement from the visitor
+            noisy_measurement = model.noisy_position  # [x, y, theta]
             
-            # Only use the measurement if the visitor is visible, otherwise use last known position
+            # Update the Kalman filter in the escort agent
+            follower.update_kalman_filter(noisy_measurement, elapsed_time, is_visitor_visible)
+            
+            # Determine which state to use for MPPI control
             if is_visitor_visible:
-                tracking_state = noisy_measurement
+                # When visible, directly track the noisy measurement
+                tracking_state = np.array([
+                    noisy_measurement[0],  # x from noisy measurement
+                    noisy_measurement[1],  # y from noisy measurement
+                    noisy_measurement[2],  # theta from noisy measurement
+                    0.0                   # Default velocity
+                ])
                 
                 # If visitor was previously lost and is now found again, update the info panel
                 if follower.search_timer >= follower.search_duration:
@@ -272,12 +274,12 @@ def run_simulation():
             else:
                 # If not visible, use the Kalman estimate as best guess of where visitor might be,
                 # but ONLY if the Kalman filter is still active (not reset)
-                if model.kalman_filter_active:
+                if follower.kalman_filter_active and follower.kalman_filter is not None:
                     tracking_state = np.array([
-                        model.kalman_filter.state[0],  # x from Kalman filter
-                        model.kalman_filter.state[1],  # y from Kalman filter
-                        model.kalman_filter.state[2],  # theta from Kalman filter
-                        model.state[3]                 # v (keep original velocity)
+                        follower.kalman_filter.state[0],  # x from Kalman filter
+                        follower.kalman_filter.state[1],  # y from Kalman filter
+                        follower.kalman_filter.state[2],  # theta from Kalman filter
+                        follower.kalman_filter.state[3]   # v from Kalman filter
                     ])
                 else:
                     # If Kalman filter has been deactivated, MPPI has no position estimate to use
@@ -302,8 +304,9 @@ def run_simulation():
                         print("Search duration expired. Kalman filter reset and deactivated.")
                     
                     # Reset and deactivate the Kalman filter when search duration expires or continues to be expired
-                    model.reset_kalman_filter()
+                    follower.reset_kalman_filter()
             
+            # Update the follower agent with the appropriate tracking state
             follower.update(dt=0.1, leader_state=tracking_state,
                           walls=environment.get_all_walls(),
                           doors=environment.get_doors())
@@ -373,13 +376,15 @@ def run_simulation():
             f"T: Toggle escort | +/-: Adjust escort distance | R: Reset escort",
             f"C: Toggle manual escort control (WASD to control when manual)",
             f"D: Toggle debug view | V: Toggle enhanced visuals",
-            f"Shift+/- or Shift++: Change measurement rate ({model.measurement_interval:.1f}s)",
             f"Computing device: {DEVICE_INFO}"  # Add device info to display
         ]
         
         if follower:
             info_text.append(f"Escort: ({int(follower.state[0])}, {int(follower.state[1])}), Target dist: {follower.target_distance:.1f}")
             info_text.append(f"Escort mode: {'MANUAL (WASD)' if manual_escort_control else 'AUTO-TRACKING'}")
+            # Add measurement interval info if it exists
+            if hasattr(follower, 'measurement_interval'):
+                info_text.append(f"Shift+/- or Shift++: Change measurement rate ({follower.measurement_interval:.1f}s)")
             
             # Display MPPI performance statistics if available
             if mppi_stats:
@@ -387,8 +392,9 @@ def run_simulation():
                 cache_hits = sum(1 for entry in follower.mppi.computation_cache if entry is not None)
                 info_text.append(f"Cache: {cache_hits}/{MPPI_CACHE_SIZE} | Batch size: {follower.mppi.batch_size}")
                 
-        # Add entropy information
-        info_text.append(f"KF Entropy: {model.current_entropy:.2f} (uncertainty measure)")
+        # Add entropy information if Kalman filter is active
+        if follower and follower.kalman_filter_active:
+            info_text.append(f"KF Entropy: {follower.current_entropy:.2f} (uncertainty measure)")
         
         if show_fps:
             info_text.append(f"FPS: {fps} (Avg frame time: {avg_frame_time:.1f}ms)")
