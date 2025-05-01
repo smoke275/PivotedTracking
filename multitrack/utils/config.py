@@ -45,10 +45,11 @@ FOLLOWER_ANGULAR_NOISE_SIGMA = 0.3       # Noise std dev for angular velocity in
 FOLLOWER_SAFETY_DISTANCE = 30.0          # Minimum safety distance for collision avoidance
 FOLLOWER_MIN_DISTANCE = 50.0             # Minimum allowed following distance
 FOLLOWER_MAX_DISTANCE = 200.0            # Maximum allowed following distance
+FOLLOWER_SEARCH_DURATION = 100           # Frames to continue searching after losing sight of target
 
 # MPPI controller settings
-MPPI_HORIZON = 15                       # Reduced from 30 for better performance
-MPPI_SAMPLES = 500                      # Reduced from 1000 for better performance
+MPPI_HORIZON = 20                       # Reduced from 30 for better performance
+MPPI_SAMPLES = 350                      # Reduced from 1000 for better performance
 MPPI_LAMBDA = 0.05                      # Temperature for softmax weighting - decreased for smoother control
 MPPI_WEIGHT_POSITION = 1.0              # Weight for position tracking
 MPPI_WEIGHT_HEADING = 0.5               # Weight for heading alignment

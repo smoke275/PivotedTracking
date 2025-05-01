@@ -86,7 +86,7 @@ def is_agent_in_vision_cone(observer, target, vision_range, vision_angle, walls,
     
     Args:
         observer: Observer agent with state [x, y, theta, v]
-        target: Target agent with state [x, y, theta, v]
+        target: Target agent with state [x, y, theta, v] and noisy_position
         vision_range: Maximum distance the observer can see
         vision_angle: Field of view angle (in radians)
         walls: List of wall rectangles
@@ -98,7 +98,10 @@ def is_agent_in_vision_cone(observer, target, vision_range, vision_angle, walls,
     # Extract positions
     obs_x, obs_y = observer.state[0], observer.state[1]
     obs_orientation = observer.state[2]
-    target_x, target_y = target.state[0], target.state[1]
+    
+    # Use the noisy position of the target instead of the actual position
+    target_x, target_y = target.noisy_position[0], target.noisy_position[1]
+    target_orientation = target.noisy_position[2]
     
     # Check if target is within vision range
     distance = math.sqrt((target_x - obs_x)**2 + (target_y - obs_y)**2)
