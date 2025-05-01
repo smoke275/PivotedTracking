@@ -15,6 +15,7 @@ from multitrack.visualizations.enhanced_rendering import (
 )
 from multitrack.utils.config import *
 from multitrack.utils.vision import is_agent_in_vision_cone
+from multitrack.filters.kalman_filter import UnicycleKalmanFilter
 
 # Initialize pygame
 pygame.init()
@@ -127,6 +128,12 @@ def run_simulation():
                         follower = FollowerAgent(target_distance=100.0)
                     if not FOLLOWER_ENABLED:
                         follower = None
+                elif event.key == pygame.K_a:
+                    # Toggle camera auto-tracking
+                    if follower:
+                        auto_track_enabled = follower.toggle_camera_auto_track()
+                        if debug_key_messages:
+                            print(f"Camera auto-tracking {'enabled' if auto_track_enabled else 'disabled'}")
                 elif event.key == pygame.K_EQUALS or event.key == pygame.K_PLUS:
                     # For measurement rate control with Shift, follower distance without
                     if pygame.key.get_mods() & pygame.KMOD_SHIFT and follower:
@@ -225,16 +232,38 @@ def run_simulation():
         # Calculate elapsed time in seconds
         elapsed_time = (pygame.time.get_ticks() - start_time_ms) / 1000.0
         
+        # Check for Q and E keys for camera rotation
+        camera_rotation_input = 0
+        if keys[pygame.K_q]:
+            camera_rotation_input = -1  # Counter-clockwise
+        elif keys[pygame.K_e]:
+            camera_rotation_input = 1   # Clockwise
+            
+        # Update secondary camera with continuous rotation if follower exists
+        if follower:
+            # Calculate time delta for physics-based camera rotation (in seconds)
+            dt = clock.get_time() / 1000.0
+            
+            # First check if auto-tracking is enabled, which overrides manual control
+            if follower.camera_auto_track:
+                # Update camera position using PID controller to track visitor
+                follower.update_camera_auto_tracking(model.noisy_position, dt)
+            else:
+                # When auto-tracking is off, always use manual control (Q/E keys)
+                # No auto-search in manual mode - only use Q/E keys to control the camera
+                follower.update_secondary_camera(camera_rotation_input, dt)
+        
         # Determine if visitor is visible to the escort agent
         is_visitor_visible = False
+        is_visitor_visible_secondary = False
         if follower:
-            # First, create a proper leader object with both state and noisy_position
+            # Create a proper leader object with both state and noisy_position
             leader = type('Leader', (), {
                 'state': model.state,  # True state (red circle)
                 'noisy_position': model.noisy_position  # Noisy measurement (what would be detected)
             })
             
-            # Check if the noisy measurement (not the Kalman estimate) is in the vision cone
+            # Check if the noisy measurement is visible with the primary camera (fixed forward)
             is_visitor_visible = is_agent_in_vision_cone(
                 observer=follower,
                 target=leader,
@@ -243,24 +272,35 @@ def run_simulation():
                 walls=environment.get_all_walls(),
                 doors=environment.get_doors()
             )
+            
+            # Update and check the secondary camera's vision cone
+            is_visitor_visible_secondary = follower.update_secondary_vision(
+                leader,
+                environment.get_all_walls(),
+                environment.get_doors()
+            )
+            
+            # Combine visibility results - visitor is visible if seen by either camera
+            is_visitor_visible_combined = is_visitor_visible or is_visitor_visible_secondary
         
         # Update model with elapsed time - no Kalman filter here anymore
         model.update(elapsed_time=elapsed_time, 
                      walls=environment.get_all_walls(),
                      doors=environment.get_doors(),
-                     is_visible=is_visitor_visible)
+                     is_visible=is_visitor_visible_combined)
         
         # Update follower agent with Kalman filter
         if follower:
             # Get the noisy measurement from the visitor
             noisy_measurement = model.noisy_position  # [x, y, theta]
             
-            # Update the Kalman filter in the escort agent
-            follower.update_kalman_filter(noisy_measurement, elapsed_time, is_visitor_visible)
+            # Update the Kalman filter in the escort agent - using combined visibility
+            # This allows the Kalman filter to be updated if visitor is seen by either camera
+            follower.update_kalman_filter(noisy_measurement, elapsed_time, is_visitor_visible_combined)
             
             # Determine which state to use for MPPI control
-            if is_visitor_visible:
-                # When visible, directly track the noisy measurement
+            if is_visitor_visible_combined:
+                # When visible by either camera, directly track the noisy measurement
                 tracking_state = np.array([
                     noisy_measurement[0],  # x from noisy measurement
                     noisy_measurement[1],  # y from noisy measurement
@@ -269,8 +309,30 @@ def run_simulation():
                 ])
                 
                 # If visitor was previously lost and is now found again, update the info panel
-                if follower.search_timer >= follower.search_duration:
+                if follower.search_timer >= follower.search_duration or not follower.kalman_filter_active:
+                    # This condition now handles:
+                    # 1. When search timer exceeded duration (standard case)
+                    # 2. When Kalman filter is inactive but we just regained vision (secondary camera case)
+                    follower.kalman_filter_active = True
                     info_text.append("Visitor found! Kalman filter reactivated with new measurement.")
+                    
+                    # If the Kalman filter was reset, we need to reinitialize it with the new measurement
+                    if not follower.kalman_filter_active or follower.kalman_filter is None:
+                        # Reset with current measurement
+                        follower.kalman_filter = UnicycleKalmanFilter(
+                            np.array([
+                                noisy_measurement[0],
+                                noisy_measurement[1], 
+                                noisy_measurement[2],
+                                0.0  # Reset velocity
+                            ]), dt=0.1)
+                        follower.kalman_filter_active = True
+                        print("Kalman filter reinitialized from secondary camera visibility")
+                        
+                    # Restart MPPI when visitor is found by either camera
+                    # This is essential to ensure tracking resumes properly after a period without measurements
+                    print("Visitor detected by camera - reactivating MPPI controller.")
+                    follower.search_timer = 0  # Reset search timer
             else:
                 # If not visible, use the Kalman estimate as best guess of where visitor might be,
                 # but ONLY if the Kalman filter is still active (not reset)
@@ -302,6 +364,9 @@ def run_simulation():
                     # Only print message when first crossing the threshold
                     if follower.search_timer == follower.search_duration:
                         print("Search duration expired. Kalman filter reset and deactivated.")
+                        # Reset the MPPI controller when search duration expires
+                        follower.mppi.reset()
+                        print("MPPI controller reset due to search duration expiration.")
                     
                     # Reset and deactivate the Kalman filter when search duration expires or continues to be expired
                     follower.reset_kalman_filter()
@@ -382,6 +447,10 @@ def run_simulation():
         if follower:
             info_text.append(f"Escort: ({int(follower.state[0])}, {int(follower.state[1])}), Target dist: {follower.target_distance:.1f}")
             info_text.append(f"Escort mode: {'MANUAL (WASD)' if manual_escort_control else 'AUTO-TRACKING'}")
+            # Add camera rotation info
+            camera_mode = "AUTO-TRACKING" if follower.camera_auto_track else "MANUAL (Q/E)"
+            info_text.append(f"Camera: {camera_mode} | Press A to toggle auto-tracking")
+            info_text.append(f"Camera angular vel: {follower.secondary_camera_angular_vel:.2f}")
             # Add measurement interval info if it exists
             if hasattr(follower, 'measurement_interval'):
                 info_text.append(f"Shift+/- or Shift++: Change measurement rate ({follower.measurement_interval:.1f}s)")

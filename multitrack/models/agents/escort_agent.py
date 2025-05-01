@@ -65,15 +65,44 @@ class FollowerAgent:
         # For collision detection
         self.prev_state = self.state.copy()
         
-        # Vision system
+        # Primary Vision system (fixed forward)
         self.vision_range = DEFAULT_VISION_RANGE
         self.vision_angle = VISION_ANGLE
         self.target_visible = False
+        self.vision_cone_points = []  # Store vision cone for visualization
+        
+        # Secondary Vision system (rotatable camera)
+        self.secondary_vision_range = DEFAULT_VISION_RANGE
+        self.secondary_vision_angle = VISION_ANGLE
+        self.secondary_vision_orientation = self.state[2]  # Initial orientation matches escort
+        self.secondary_camera_offset = 0.0  # Offset angle from escort's orientation
+        self.secondary_target_visible = False
+        self.secondary_vision_cone_points = []
+        
+        # Enhanced camera controls with angular velocity
+        self.secondary_camera_angular_vel = 0.0  # Current angular velocity of the camera
+        self.secondary_camera_max_angular_vel = SECONDARY_CAMERA_MAX_ANGULAR_VEL  # Maximum angular velocity
+        self.secondary_camera_angular_accel = SECONDARY_CAMERA_ANGULAR_ACCEL  # Angular acceleration per frame
+        self.secondary_camera_angular_decel = SECONDARY_CAMERA_ANGULAR_DECEL  # Angular deceleration when not rotating
+        
+        # Camera auto-tracking system
+        self.camera_auto_track = CAMERA_AUTO_TRACK_ENABLED  # Auto-tracking toggle
+        self.camera_pid_p = CAMERA_PID_P  # Proportional gain
+        self.camera_pid_i = CAMERA_PID_I  # Integral gain
+        self.camera_pid_d = CAMERA_PID_D  # Derivative gain
+        self.camera_error_integral = 0.0  # For the integral term
+        self.camera_prev_error = 0.0  # For the derivative term
+        self.camera_search_mode = True  # Start in search mode (active from startup)
+        self.camera_track_timer = 0  # Timer for tracking timeout
+        self.camera_last_seen_angle = 0.0  # Last angle visitor was seen at
+        self.camera_search_direction = 1  # Direction to search in
+        self.measurement_update_timer = 0  # Count frames without measurement updates
+    
+        # Target tracking
         self.last_seen_position = None
         self.search_mode = False
         self.search_timer = 0
-        self.search_duration = search_duration  # Now using the config value
-        self.vision_cone_points = []  # Store vision cone for visualization
+        self.search_duration = search_duration
         
         # Manual control mode
         self.manual_mode = False
@@ -509,7 +538,7 @@ class FollowerAgent:
             else:
                 pygame.draw.line(screen, GREEN, (kf_x, kf_y), (end_x, end_y), 2)
         
-        # Draw vision cone if we have points
+        # Draw primary vision cone (fixed forward)
         if self.vision_cone_points and len(self.vision_cone_points) > 2:
             # Convert vision cone points to pygame format
             vision_points = [(int(p[0]), int(p[1])) for p in self.vision_cone_points]
@@ -537,6 +566,51 @@ class FollowerAgent:
             for i in range(1, len(vision_points)-1):
                 pygame.draw.line(vision_surface, (*vision_color[:3], 150), 
                             vision_points[i], vision_points[i+1], 1)
+            
+            # Blit the vision surface onto the screen
+            screen.blit(vision_surface, (0, 0))
+        
+        # Draw secondary vision cone (rotatable camera)
+        if self.secondary_vision_cone_points and len(self.secondary_vision_cone_points) > 2:
+            # Convert vision cone points to pygame format
+            vision_points = [(int(p[0]), int(p[1])) for p in self.secondary_vision_cone_points]
+            
+            # Create a semi-transparent surface for the vision cone
+            vision_surface = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
+            
+            # Set color based on whether target is visible with secondary camera
+            # Use a different color scheme for the secondary camera
+            if self.secondary_target_visible:
+                # Cyan when target is visible with secondary camera
+                vision_color = (0, 200, 255, VISION_TRANSPARENCY)
+            else:
+                # Light purple when searching with secondary camera
+                vision_color = (200, 100, 255, VISION_TRANSPARENCY)
+            
+            # Draw polygon for vision cone
+            pygame.draw.polygon(vision_surface, vision_color, vision_points)
+            
+            # Draw lines around the edge of the vision cone
+            for i in range(1, len(vision_points)):
+                pygame.draw.line(vision_surface, (*vision_color[:3], 150), 
+                            vision_points[0], vision_points[i], 1)
+            
+            # Draw connection between consecutive points along the arc
+            for i in range(1, len(vision_points)-1):
+                pygame.draw.line(vision_surface, (*vision_color[:3], 150), 
+                            vision_points[i], vision_points[i+1], 1)
+            
+            # Draw a small indicator showing the camera orientation
+            cam_x, cam_y = self.state[0], self.state[1]
+            cam_dir_x = cam_x + 18 * cos(self.secondary_vision_orientation)
+            cam_dir_y = cam_y + 18 * sin(self.secondary_vision_orientation)
+            pygame.draw.line(vision_surface, (255, 255, 255, 200), 
+                         (int(cam_x), int(cam_y)), 
+                         (int(cam_dir_x), int(cam_dir_y)), 3)
+            
+            # Draw a small camera icon at the position
+            pygame.draw.circle(vision_surface, (255, 255, 255, 200), 
+                          (int(cam_x), int(cam_y)), 5, 2)
             
             # Blit the vision surface onto the screen
             screen.blit(vision_surface, (0, 0))
@@ -644,6 +718,18 @@ class FollowerAgent:
         - elapsed_time: Current simulation time for interval tracking
         - is_visible: Whether the visitor is visible to the escort
         """
+        # Track frames without measurement updates
+        if is_visible:
+            self.measurement_update_timer = 0
+        else:
+            self.measurement_update_timer += 1
+            
+        # If we haven't received measurements for a while, ensure camera is in search mode
+        # This works regardless of whether the camera is in auto-tracking mode
+        if self.measurement_update_timer > 10 and not self.camera_search_mode:
+            self.camera_search_mode = True
+            self.camera_track_timer = 0
+        
         # Initialize Kalman filter if it doesn't exist yet
         if self.kalman_filter is None:
             if is_visible and noisy_measurement is not None:
@@ -721,3 +807,224 @@ class FollowerAgent:
                                        min(MAX_MEASUREMENT_INTERVAL, 
                                            self.measurement_interval + delta))
         return self.measurement_interval
+    
+    def rotate_secondary_camera(self, direction):
+        """
+        Rotate the secondary camera in the specified direction
+        
+        Parameters:
+        - direction: 1 for clockwise, -1 for counter-clockwise
+        """
+        # Update the offset angle of the secondary camera
+        self.secondary_camera_offset += direction * self.secondary_vision_rotation_speed
+        
+        # Normalize angle to [-pi, pi]
+        self.secondary_camera_offset = (self.secondary_camera_offset + pi) % (2 * pi) - pi
+        
+        # Calculate absolute orientation by adding offset to escort's orientation
+        self.secondary_vision_orientation = (self.state[2] + self.secondary_camera_offset + pi) % (2 * pi) - pi
+    
+    def update_secondary_camera(self, rotation_input, dt):
+        """
+        Update the secondary camera's rotation based on angular velocity and user input
+        
+        Parameters:
+        - rotation_input: -1 for counterclockwise (Q), 1 for clockwise (E), 0 for no rotation
+        - dt: Time step in seconds
+        """
+        # Update angular velocity based on input
+        if rotation_input != 0:
+            # Accelerate in the direction of rotation input
+            target_vel = rotation_input * self.secondary_camera_max_angular_vel
+            # Gradually approach the target velocity
+            if self.secondary_camera_angular_vel < target_vel:
+                self.secondary_camera_angular_vel = min(target_vel, 
+                    self.secondary_camera_angular_vel + self.secondary_camera_angular_accel)
+            elif self.secondary_camera_angular_vel > target_vel:
+                self.secondary_camera_angular_vel = max(target_vel, 
+                    self.secondary_camera_angular_vel - self.secondary_camera_angular_accel)
+        else:
+            # Decelerate when no input
+            if abs(self.secondary_camera_angular_vel) < self.secondary_camera_angular_decel:
+                self.secondary_camera_angular_vel = 0  # Stop completely if nearly stopped
+            elif self.secondary_camera_angular_vel > 0:
+                self.secondary_camera_angular_vel -= self.secondary_camera_angular_decel
+            else:
+                self.secondary_camera_angular_vel += self.secondary_camera_angular_decel
+        
+        # Update the camera offset based on angular velocity
+        if self.secondary_camera_angular_vel != 0:
+            self.secondary_camera_offset += self.secondary_camera_angular_vel * dt
+            
+            # Normalize angle to [-pi, pi]
+            self.secondary_camera_offset = (self.secondary_camera_offset + pi) % (2 * pi) - pi
+            
+            # Calculate absolute orientation by adding offset to escort's orientation
+            self.secondary_vision_orientation = (self.state[2] + self.secondary_camera_offset + pi) % (2 * pi) - pi
+    
+    def update_secondary_vision(self, leader, walls, doors):
+        """
+        Update the secondary vision cone and check if the target is visible
+        
+        Parameters:
+        - leader: Leader agent with state and noisy_position
+        - walls: List of wall rectangles
+        - doors: List of door rectangles
+        
+        Returns:
+        - True if leader is visible with the secondary camera, False otherwise
+        """
+        # Update the secondary camera orientation based on escort's current orientation
+        self.secondary_vision_orientation = (self.state[2] + self.secondary_camera_offset + pi) % (2 * pi) - pi
+        
+        # Create a temporary agent for vision cone calculation
+        # This represents the secondary camera with its own orientation
+        secondary_camera = type('Camera', (), {
+            'state': np.array([
+                self.state[0],  # x - same as escort
+                self.state[1],  # y - same as escort
+                self.secondary_vision_orientation,  # theta - updated orientation based on offset
+                0.0  # v - not needed for vision
+            ])
+        })
+        
+        # Calculate vision cone points for the secondary camera
+        self.secondary_vision_cone_points = get_vision_cone_points(
+            secondary_camera, 
+            self.secondary_vision_range, 
+            self.secondary_vision_angle, 
+            walls, 
+            doors
+        )
+        
+        # Check if the leader is visible with the secondary camera
+        self.secondary_target_visible = is_agent_in_vision_cone(
+            secondary_camera,
+            leader,
+            self.secondary_vision_range,
+            self.secondary_vision_angle,
+            walls,
+            doors
+        )
+        
+        return self.secondary_target_visible
+    
+    def toggle_camera_auto_track(self):
+        """Toggle camera auto-tracking mode on/off"""
+        self.camera_auto_track = not self.camera_auto_track
+        
+        # Reset PID controller when enabling auto-tracking
+        if self.camera_auto_track:
+            self.camera_error_integral = 0.0
+            self.camera_prev_error = 0.0
+            self.camera_search_mode = False
+            self.camera_track_timer = 0
+            print("Camera auto-tracking activated")
+        else:
+            print("Camera auto-tracking deactivated")
+        
+        return self.camera_auto_track
+    
+    def update_camera_auto_tracking(self, leader_state, dt):
+        """
+        Update camera position using PID controller to track the visitor or search for them when lost
+        
+        Parameters:
+        - leader_state: Noisy position of the leader [x, y, theta]
+        - dt: Time step in seconds
+        
+        Returns:
+        - rotation_input: Camera rotation input (-1, 0, or 1)
+        """
+        # If target is visible and auto-tracking is enabled, directly track it with PID controller
+        if self.secondary_target_visible and self.camera_auto_track:
+            # Reset search mode and store the last seen position when visitor is visible
+            self.camera_search_mode = False
+            self.camera_track_timer = 0
+            
+            # Calculate angle to target
+            target_x, target_y = leader_state[0], leader_state[1]
+            escort_x, escort_y = self.state[0], self.state[1]
+            target_angle = np.arctan2(target_y - escort_y, target_x - escort_x)
+            
+            # Store the angle where we last saw the target (for all modes)
+            self.camera_last_seen_angle = target_angle
+            
+            # Calculate error (difference between current camera angle and desired angle)
+            error = target_angle - self.secondary_vision_orientation
+            error = (error + pi) % (2 * pi) - pi  # Normalize to [-pi, pi]
+            
+            # Calculate integral term (with anti-windup)
+            self.camera_error_integral += error * dt
+            self.camera_error_integral = max(-CAMERA_MAX_ERROR_INTEGRAL, 
+                                         min(CAMERA_MAX_ERROR_INTEGRAL, 
+                                             self.camera_error_integral))
+            
+            # Calculate derivative term
+            error_derivative = (error - self.camera_prev_error) / dt if dt > 0 else 0
+            self.camera_prev_error = error
+            
+            # PID control equation
+            control = (self.camera_pid_p * error + 
+                      self.camera_pid_i * self.camera_error_integral + 
+                      self.camera_pid_d * error_derivative)
+            
+            # Convert control output to angular velocity
+            self.secondary_camera_angular_vel = max(-self.secondary_camera_max_angular_vel,
+                                                min(self.secondary_camera_max_angular_vel, 
+                                                    control))
+        # If target is visible but auto-tracking is off, just store the angle (no movement)
+        elif self.secondary_target_visible and not self.camera_auto_track:
+            # Even when auto-tracking is off, still keep track of where we saw the visitor
+            target_x, target_y = leader_state[0], leader_state[1]
+            escort_x, escort_y = self.state[0], self.state[1]
+            self.camera_last_seen_angle = np.arctan2(target_y - escort_y, target_x - escort_x)
+            self.camera_search_mode = False
+            self.camera_track_timer = 0
+            # Don't adjust angular velocity - let manual control handle it
+            return 0
+        # Target is not visible - search mode
+        else:
+            # If we're not already in search mode, initialize it
+            if not self.camera_search_mode:
+                self.camera_search_mode = True
+                self.camera_track_timer = 0
+                
+                # Always set search direction to clockwise (positive value)
+                self.camera_search_direction = 1
+            
+            # Always increment tracking timeout when in search mode
+            self.camera_track_timer += 1
+            
+            # First try to return to the last known position (if we have one)
+            if self.camera_track_timer < CAMERA_TRACK_TIMEOUT and self.camera_last_seen_angle != 0.0:
+                # Calculate error (difference between current camera angle and last seen angle)
+                error = self.camera_last_seen_angle - self.secondary_vision_orientation
+                error = (error + pi) % (2 * pi) - pi  # Normalize to [-pi, pi]
+                
+                # If we're close to the last seen angle and still don't see the target,
+                # start the search pattern
+                if abs(error) < 0.1:  # About 5.7 degrees
+                    # Set a constant angular velocity for clockwise sweeping search
+                    self.secondary_camera_angular_vel = CAMERA_SEARCH_SPEED
+                else:
+                    # Move toward the last seen angle faster than normal
+                    self.secondary_camera_angular_vel = max(-self.secondary_camera_max_angular_vel,
+                                                        min(self.secondary_camera_max_angular_vel, 
+                                                            5.0 * error))  # Faster convergence
+            else:
+                # Full 360° search mode - constant angular velocity in clockwise direction
+                self.secondary_camera_angular_vel = CAMERA_SEARCH_SPEED
+                
+                # No longer reverse direction - always rotate clockwise
+        
+        # Always update the camera position based on angular velocity
+        self.secondary_camera_offset += self.secondary_camera_angular_vel * dt
+        
+        # Normalize angle to [-pi, pi]
+        self.secondary_camera_offset = (self.secondary_camera_offset + pi) % (2 * pi) - pi
+        
+        # Calculate absolute orientation by adding offset to escort's orientation
+        self.secondary_vision_orientation = (self.state[2] + self.secondary_camera_offset + pi) % (2 * pi) - pi
+        
+        return 0

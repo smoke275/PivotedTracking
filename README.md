@@ -18,6 +18,16 @@ The simulation includes:
 - Wall and obstacle collision detection
 - Dynamic entropy measurement of the visitor's estimated state
 
+## Images and Documentation
+
+The `images/` directory contains screenshots and visual documentation of the simulation:
+- Implementation diagrams
+- System architecture
+- Sample tracking scenarios
+- UI elements and controls
+
+You can add your own screenshots to this directory by pressing the Print Screen key during simulation or using your preferred screen capture tool.
+
 ## Setup Instructions
 
 ### Prerequisites

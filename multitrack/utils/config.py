@@ -57,7 +57,7 @@ MPPI_WEIGHT_CONTROL = 0.1               # Weight for control effort - increased 
 MPPI_WEIGHT_COLLISION = 10.0            # Weight for collision avoidance
 MPPI_WEIGHT_FORWARD = 0.3               # Weight for forward direction incentive
 MPPI_USE_GPU = True                     # Enable GPU acceleration
-MPPI_GPU_BATCH_SIZE = 100               # Process samples in batches for better GPU memory management
+MPPI_GPU_BATCH_SIZE = 200               # Process samples in batches for better GPU memory management
 MPPI_USE_ASYNC = True                   # Use asynchronous computation where possible
 MPPI_CACHE_SIZE = 5                     # Cache recent computations for reuse
 
@@ -85,6 +85,20 @@ MPPI_PREDICTION_COLOR = (255, 100, 100)   # Color for MPPI predictions
 # Vision parameters
 DEFAULT_VISION_RANGE = 800      # Initial vision range in pixels
 VISION_ANGLE = math.pi/2        # 60 degrees field of view
+
+# Secondary Camera parameters
+SECONDARY_CAMERA_MAX_ANGULAR_VEL = 4.0  # Maximum angular velocity (radians/sec)
+SECONDARY_CAMERA_ANGULAR_ACCEL = 1.0   # Angular acceleration (radians/sec²)
+SECONDARY_CAMERA_ANGULAR_DECEL = 0.5    # Angular deceleration (radians/sec²)
+
+# Camera auto-tracking parameters
+CAMERA_AUTO_TRACK_ENABLED = True  # Default auto-tracking state
+CAMERA_PID_P = 3.0  # Proportional gain for camera tracking
+CAMERA_PID_I = 0.1  # Integral gain for camera tracking
+CAMERA_PID_D = 0.5  # Derivative gain for camera tracking
+CAMERA_SEARCH_SPEED = 1.0  # Angular velocity for camera search behavior (radians/sec)
+CAMERA_MAX_ERROR_INTEGRAL = 1.0  # Maximum error integral to prevent windup
+CAMERA_TRACK_TIMEOUT = 60  # Frames to continue tracking after losing sight of visitor
 
 # Agent parameters
 AGENT_SIZE = 20                 # Size of the agent

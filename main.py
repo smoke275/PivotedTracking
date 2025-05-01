@@ -29,7 +29,13 @@ if __name__ == "__main__":
     sim_HEIGHT = args.height
     
     print(f"Starting MultiTrack simulation with screen size {args.width}x{args.height}...")
-    print("Note: The Kalman filter (green circle) updates with control information even when the visitor is out of sight.")
-    print("      This is not realistic behavior and should be fixed by modifying visitor_agent.py to prevent control updates")
-    print("      when is_visible=False. Currently the escort knows which way the visitor is moving even without seeing it.")
+    print("Controls:")
+    print("  - Arrow keys: Control the visitor")
+    print("  - WASD: Manual control of the escort (when in manual mode)")
+    print("  - Q/E: Rapidly rotate the escort's secondary camera (hold for continuous rotation)")
+    print("  - A: Toggle camera auto-tracking (camera will automatically follow the visitor)")
+    print("  - C: Toggle between manual and auto-tracking modes for the escort")
+    print("  - +/-: Adjust following distance")
+    print("  - R: Reset escort position")
+    print("  - ESC: Quit")
     run_simulation()
