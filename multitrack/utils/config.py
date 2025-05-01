@@ -38,18 +38,20 @@ FOLLOWER_ENABLED = True                  # Enable/disable follower agent
 FOLLOWER_TARGET_DISTANCE = 50.0         # Default following distance
 FOLLOWER_LINEAR_VEL_MIN = 0.0            # Minimum linear velocity (changed from -50.0 to enforce forward-only motion)
 FOLLOWER_LINEAR_VEL_MAX = 50.0           # Maximum linear velocity
-FOLLOWER_ANGULAR_VEL_MIN = -0.6          # Minimum angular velocity (less agile)
-FOLLOWER_ANGULAR_VEL_MAX = 0.6           # Maximum angular velocity (less agile)
+FOLLOWER_ANGULAR_VEL_MIN = -1.2          # Minimum angular velocity (increased for sharper turns)
+FOLLOWER_ANGULAR_VEL_MAX = 1.2           # Maximum angular velocity (increased for sharper turns)
 FOLLOWER_LINEAR_NOISE_SIGMA = 10.0       # Noise std dev for linear velocity in MPPI
-FOLLOWER_ANGULAR_NOISE_SIGMA = 0.3       # Noise std dev for angular velocity in MPPI
-FOLLOWER_SAFETY_DISTANCE = 30.0          # Minimum safety distance for collision avoidance
+FOLLOWER_ANGULAR_NOISE_SIGMA = 0.5       # Increased noise for more exploration of turning options
+FOLLOWER_SAFETY_DISTANCE = 40.0          # Increased minimum safety distance for collision avoidance
+FOLLOWER_STOPPING_RADIUS = 70.0          # Radius around stationary visitor to stop moving
 FOLLOWER_MIN_DISTANCE = 50.0             # Minimum allowed following distance
 FOLLOWER_MAX_DISTANCE = 200.0            # Maximum allowed following distance
 FOLLOWER_SEARCH_DURATION = 100           # Frames to continue searching after losing sight of target
+FOLLOWER_PROXIMITY_PENALTY = 20.0        # Heavy penalty factor for getting too close to visitor
 
 # MPPI controller settings
-MPPI_HORIZON = 20                       # Reduced from 30 for better performance
-MPPI_SAMPLES = 350                      # Reduced from 1000 for better performance
+MPPI_HORIZON = 35                       # Reduced from 30 for better performance
+MPPI_SAMPLES = 15000                      # Reduced from 1000 for better performance
 MPPI_LAMBDA = 0.05                      # Temperature for softmax weighting - decreased for smoother control
 MPPI_WEIGHT_POSITION = 1.0              # Weight for position tracking
 MPPI_WEIGHT_HEADING = 0.5               # Weight for heading alignment
@@ -57,7 +59,7 @@ MPPI_WEIGHT_CONTROL = 0.1               # Weight for control effort - increased 
 MPPI_WEIGHT_COLLISION = 10.0            # Weight for collision avoidance
 MPPI_WEIGHT_FORWARD = 0.3               # Weight for forward direction incentive
 MPPI_USE_GPU = True                     # Enable GPU acceleration
-MPPI_GPU_BATCH_SIZE = 200               # Process samples in batches for better GPU memory management
+MPPI_GPU_BATCH_SIZE = 12288             # Process samples in batches for better GPU memory management (optimized for RTX A3000)
 MPPI_USE_ASYNC = True                   # Use asynchronous computation where possible
 MPPI_CACHE_SIZE = 5                     # Cache recent computations for reuse
 

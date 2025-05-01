@@ -6,6 +6,12 @@ allowing an automated agent to optimally follow a target while respecting
 dynamics constraints of the unicycle model.
 GPU acceleration is used when available with optimized memory usage and batching.
 """
+import os
+import sys
+
+# Add the project root directory to the Python path
+sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
+
 import numpy as np
 from math import sin, cos, pi, sqrt, atan2, exp
 import time
@@ -303,6 +309,10 @@ class MPPIController:
         w_forward = torch.tensor(self.cost_weights['forward'], dtype=torch.float32, device=self.device)
         w_collision = torch.tensor(self.cost_weights['collision'], dtype=torch.float32, device=self.device)
         
+        # Precompute proximity penalty weight as tensor
+        proximity_weight = torch.tensor(FOLLOWER_PROXIMITY_PENALTY, dtype=torch.float32, device=self.device)
+        safety_dist = torch.tensor(FOLLOWER_SAFETY_DISTANCE, dtype=torch.float32, device=self.device)
+        
         for batch_idx in range(num_batches):
             start_idx = batch_idx * self.batch_size
             end_idx = min((batch_idx + 1) * self.batch_size, all_states.size(0))
@@ -348,8 +358,18 @@ class MPPIController:
                 forward_cost = -torch.clamp(v, min=0) * w_forward
                 forward_cost += torch.clamp(-v, min=0) * w_forward * 2
                 
+                # Proximity penalty - heavily penalize getting too close to visitor
+                dist_to_visitor = torch.sqrt((x - tx)**2 + (y - ty)**2)
+                proximity_cost = torch.zeros_like(forward_cost, device=self.device)
+                
+                # Apply penalty for getting closer than the safety distance
+                too_close_mask = dist_to_visitor < safety_dist
+                if too_close_mask.any():
+                    # Use exponential penalty that increases sharply as distance decreases
+                    proximity_cost[too_close_mask] = ((safety_dist - dist_to_visitor[too_close_mask])**2) * proximity_weight
+                
                 # Sum costs for this time step
-                step_cost = pos_cost + heading_cost + ctrl_cost + forward_cost
+                step_cost = pos_cost + heading_cost + ctrl_cost + forward_cost + proximity_cost
                 
                 # Add to total cost
                 batch_costs += step_cost
@@ -428,6 +448,7 @@ class MPPIController:
             tx = target_trajectory[target_idx, 0]
             ty = target_trajectory[target_idx, 1]
             ttheta = target_trajectory[target_idx, 2]
+            tv = target_trajectory[target_idx, 3]  # Target velocity
             
             # Vectorized cost calculations
             # Position cost
@@ -444,19 +465,49 @@ class MPPIController:
             forward_cost = -np.maximum(0, v) * weights['forward']
             forward_cost += np.maximum(0, -v) * weights['forward'] * 2
             
-            # Sum all step costs
-            total_costs += pos_cost + heading_cost + ctrl_cost + forward_cost
+            # If target velocity is near zero, add strong incentive to stop when close to target
+            stop_cost = np.zeros_like(forward_cost)
+            if abs(tv) < 0.1:  # Target is stationary
+                # Get distance to target
+                dist_to_target = np.sqrt((x - tx) ** 2 + (y - ty) ** 2)
+                # Add stop cost when within stopping radius
+                stop_mask = dist_to_target < FOLLOWER_STOPPING_RADIUS
+                if np.any(stop_mask):
+                    # Penalize any non-zero velocity when close to stationary target
+                    stop_cost[stop_mask] = (np.abs(v[stop_mask])) * weights['forward'] * 5.0
+                    
+            # Proximity penalty - heavily penalize getting too close to visitor
+            proximity_cost = np.zeros_like(forward_cost)
+            dist_to_visitor = np.sqrt((x - tx) ** 2 + (y - ty) ** 2)
+            # Apply penalty for getting closer than the safety distance
+            too_close_mask = dist_to_visitor < FOLLOWER_SAFETY_DISTANCE
+            if np.any(too_close_mask):
+                # Use exponential penalty that increases sharply as distance decreases
+                proximity_cost[too_close_mask] = (FOLLOWER_SAFETY_DISTANCE - dist_to_visitor[too_close_mask])**2 * FOLLOWER_PROXIMITY_PENALTY
             
-        # Handle obstacles
+            # Sum all step costs
+            total_costs += pos_cost + heading_cost + ctrl_cost + forward_cost + stop_cost + proximity_cost
+            
+        # Handle obstacles with improved wall avoidance
         if obstacles is not None:
             for i in range(self.samples):
                 for t in range(1, self.horizon + 1):
                     x, y = all_states[i, t, 0], all_states[i, t, 1]
+                    v = all_states[i, t, 3]  # Get velocity
                     
                     for ox, oy, radius in obstacles:
                         dist = sqrt((x - ox)**2 + (y - oy)**2)
                         if dist < self.safety_distance:
-                            total_costs[i] += ((self.safety_distance - dist)**2) * weights['collision']
+                            # Stronger cost for obstacle avoidance based on velocity
+                            # Higher velocity means we need stronger avoidance
+                            vel_factor = 1.0 + abs(v) * 0.5  # Scale avoidance with velocity
+                            avoidance_cost = ((self.safety_distance - dist)**2) * weights['collision'] * vel_factor
+                            
+                            # Add exponential term for very close obstacles
+                            if dist < self.safety_distance * 0.5:
+                                avoidance_cost += ((self.safety_distance - dist)**3) * weights['collision'] * 2.0
+                                
+                            total_costs[i] += avoidance_cost
         
         return total_costs
         

@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(os.path.dirna
 import numpy as np
 import pygame
 from math import sin, cos, pi
+from collections import deque
 from multitrack.controllers.mppi_controller import MPPIController
 from multitrack.utils.vision import is_agent_in_vision_cone, get_vision_cone_points
 from multitrack.utils.config import *
@@ -120,6 +121,15 @@ class FollowerAgent:
         self.entropy_times = []
         self.max_history_points = 100  # Maximum number of points to display
         self.current_entropy = 0.0
+        
+        # Stuck detection and recovery
+        self.position_history = deque(maxlen=20)  # Store recent positions for stuck detection
+        self.is_stuck = False  # Flag to indicate if agent is stuck
+        self.stuck_timer = 0  # Timer to track how long the agent has been stuck
+        self.backup_timer = 0  # Timer for backing up behavior
+        self.backup_duration = 30  # How long to back up when stuck (in frames)
+        self.min_movement_threshold = 5.0  # Minimum movement required to not be considered stuck
+        self.stuck_check_interval = 10  # How often to check if stuck (in frames)
     
     def _find_valid_position(self, walls, doors=None):
         """Find a valid position that doesn't collide with walls"""
@@ -205,6 +215,43 @@ class FollowerAgent:
             # Reset controls when switching to manual
             self.controls = np.array([0.0, 0.0])
     
+    def check_if_stuck(self):
+        """
+        Detect if the agent is stuck by checking if it's not making significant progress
+        despite having a target to move toward
+        
+        Returns:
+        - True if agent is stuck, False otherwise
+        """
+        # Only check for stuck state if we have enough position history
+        if len(self.position_history) < self.position_history.maxlen:
+            return False
+        
+        # Only consider the agent stuck if it has vision and is trying to move
+        if not (self.target_visible or self.secondary_target_visible) or abs(self.state[3]) < 2.0:
+            return False
+            
+        # Calculate total distance moved over the history window
+        first_pos = self.position_history[0]
+        total_distance = 0
+        
+        # Sum the distances between consecutive positions
+        for i in range(1, len(self.position_history)):
+            prev = self.position_history[i-1]
+            curr = self.position_history[i]
+            dx = curr[0] - prev[0]
+            dy = curr[1] - prev[1]
+            total_distance += np.sqrt(dx**2 + dy**2)
+        
+        # Check direct distance from start to end of window
+        dx = self.state[0] - first_pos[0]
+        dy = self.state[1] - first_pos[1]
+        direct_distance = np.sqrt(dx**2 + dy**2)
+        
+        # Agent is stuck if total distance moved is significant but direct distance is small
+        # (moving back and forth without making progress)
+        return total_distance > self.min_movement_threshold * 3 and direct_distance < self.min_movement_threshold
+    
     def update(self, dt, leader_state, obstacles=None, walls=None, doors=None):
         """
         Update follower agent state based on leader position
@@ -218,6 +265,25 @@ class FollowerAgent:
         """
         # Store previous state for collision detection
         self.prev_state = self.state.copy()
+        
+        # Store current position in history for stuck detection
+        self.position_history.append((self.state[0], self.state[1]))
+        
+        # Check if stuck every few frames
+        if self.stuck_timer % self.stuck_check_interval == 0:
+            newly_stuck = self.check_if_stuck()
+            if newly_stuck and not self.is_stuck:
+                # Just detected being stuck - start backup behavior
+                self.is_stuck = True
+                self.backup_timer = self.backup_duration
+                print("Escort detected stuck state. Initiating backup maneuver.")
+            elif not newly_stuck and self.is_stuck:
+                # We were stuck but no longer are
+                self.is_stuck = False
+                print("Escort no longer stuck. Resuming normal movement.")
+        
+        # Update stuck timer
+        self.stuck_timer += 1
         
         # Update vision cone for visualization
         if walls is not None and doors is not None:
@@ -247,56 +313,67 @@ class FollowerAgent:
         
         # Skip automatic control calculations if in manual mode
         if not self.manual_mode:
-            # Vision-based targeting logic
-            if target_visible:
-                # Generate target trajectory (follow leader at a distance)
-                target_trajectory = self._generate_target_trajectory(leader_state)
+            # If we're in backup mode, override other controls
+            if self.is_stuck and self.backup_timer > 0:
+                # Execute backup maneuver
+                # Reverse with slight turning to break out of local minimum
+                self.controls = np.array([-20.0, 0.3])  # Back up with slight turn
+                self.backup_timer -= 1
                 
-                # Compute optimal control using MPPI
-                optimal_control, predicted_trajectory = self.mppi.compute_control(
-                    self.state, target_trajectory, obstacles)
-                
-                # Store predicted trajectory for visualization
-                self.predicted_trajectory = predicted_trajectory
-                
-                # Apply control
-                self.controls = optimal_control
+                # If backup timer expired, reset stuck status
+                if self.backup_timer <= 0:
+                    self.is_stuck = False
             else:
-                # Leader not visible but we have a last seen position
-                if self.last_seen_position is not None:
-                    # In search mode, head toward last seen position
-                    if self.search_timer < self.search_duration:
-                        # Create a target state at the last seen position
-                        target_x, target_y = self.last_seen_position
-                        
-                        # Calculate vector to last seen position
-                        dx = target_x - self.state[0]
-                        dy = target_y - self.state[1]
-                        target_theta = np.arctan2(dy, dx)
-                        
-                        # Create a target state with the agent's position and the target orientation
-                        # This will make the agent navigate to the last seen position
-                        target_state = np.array([target_x, target_y, target_theta, 0.0])
-                        target_trajectory = np.tile(target_state, (self.mppi.horizon + 1, 1))
-                        
-                        # Compute control to move to last seen position
-                        optimal_control, predicted_trajectory = self.mppi.compute_control(
-                            self.state, target_trajectory, obstacles)
-                        
-                        # Store predicted trajectory for visualization
-                        self.predicted_trajectory = predicted_trajectory
-                        
-                        # Apply control
-                        self.controls = optimal_control
-                        
-                        # Increment search timer
-                        self.search_timer += 1
-                    else:
-                        # Search duration exceeded - stop moving
-                        self.controls = np.array([0.0, 0.0])
+                # Normal vision-based targeting logic
+                if target_visible:
+                    # Generate target trajectory (follow leader at a distance)
+                    target_trajectory = self._generate_target_trajectory(leader_state)
+                    
+                    # Compute optimal control using MPPI
+                    optimal_control, predicted_trajectory = self.mppi.compute_control(
+                        self.state, target_trajectory, obstacles)
+                    
+                    # Store predicted trajectory for visualization
+                    self.predicted_trajectory = predicted_trajectory
+                    
+                    # Apply control
+                    self.controls = optimal_control
                 else:
-                    # Never seen leader - don't move
-                    self.controls = np.array([0.0, 0.0])
+                    # Leader not visible but we have a last seen position
+                    if self.last_seen_position is not None:
+                        # In search mode, head toward last seen position
+                        if self.search_timer < self.search_duration:
+                            # Create a target state at the last seen position
+                            target_x, target_y = self.last_seen_position
+                            
+                            # Calculate vector to last seen position
+                            dx = target_x - self.state[0]
+                            dy = target_y - self.state[1]
+                            target_theta = np.arctan2(dy, dx)
+                            
+                            # Create a target state with the agent's position and the target orientation
+                            # This will make the agent navigate to the last seen position
+                            target_state = np.array([target_x, target_y, target_theta, 0.0])
+                            target_trajectory = np.tile(target_state, (self.mppi.horizon + 1, 1))
+                            
+                            # Compute control to move to last seen position
+                            optimal_control, predicted_trajectory = self.mppi.compute_control(
+                                self.state, target_trajectory, obstacles)
+                            
+                            # Store predicted trajectory for visualization
+                            self.predicted_trajectory = predicted_trajectory
+                            
+                            # Apply control
+                            self.controls = optimal_control
+                            
+                            # Increment search timer
+                            self.search_timer += 1
+                        else:
+                            # Search duration exceeded - stop moving
+                            self.controls = np.array([0.0, 0.0])
+                    else:
+                        # Never seen leader - don't move
+                        self.controls = np.array([0.0, 0.0])
         
         # Update state using unicycle dynamics
         x, y, theta, _ = self.state
@@ -384,6 +461,9 @@ class FollowerAgent:
         dy = ly - self.state[1]
         current_distance = (dx**2 + dy**2)**0.5
         
+        # Check if leader is moving
+        leader_is_moving = abs(lv) > 0.1
+        
         # Target position is behind the leader at the specified distance
         tx = lx - self.target_distance * cos(ltheta)
         ty = ly - self.target_distance * sin(ltheta)
@@ -410,14 +490,24 @@ class FollowerAgent:
         target_dy = ly - ty
         ttheta = np.arctan2(target_dy, target_dx)
         
-        # Target velocity should adjust based on distance to leader
-        # Slow down when close to target position
-        target_pos_dx = tx - self.state[0]
-        target_pos_dy = ty - self.state[1]
-        target_pos_distance = (target_pos_dx**2 + target_pos_dy**2)**0.5
-        
-        # Adaptive velocity: faster when far, slower when close
-        tv = min(lv, target_pos_distance * 0.2)
+        # Target velocity should adjust based on distance to target and leader velocity
+        # If leader is not moving and we're within stopping radius, set target velocity to 0
+        if not leader_is_moving and current_distance < FOLLOWER_STOPPING_RADIUS:
+            tv = 0.0  # Stop when within the stopping radius of a stationary visitor
+        else:
+            # Adaptive velocity: faster when far, slower when close
+            target_pos_dx = tx - self.state[0]
+            target_pos_dy = ty - self.state[1]
+            target_pos_distance = (target_pos_dx**2 + target_pos_dy**2)**0.5
+            
+            # Scale velocity based on distance and leader's velocity
+            tv = min(lv * 1.2, target_pos_distance * 0.2)  # Give a slight boost to catch up
+            
+            # If approaching a stopping point, gradually reduce velocity
+            if not leader_is_moving and current_distance < FOLLOWER_STOPPING_RADIUS * 1.5:
+                slowdown_factor = (current_distance - FOLLOWER_STOPPING_RADIUS) / (FOLLOWER_STOPPING_RADIUS * 0.5)
+                slowdown_factor = max(0.0, min(1.0, slowdown_factor))
+                tv *= slowdown_factor
         
         # For simplicity, repeat the target state for the entire horizon
         target_state = np.array([tx, ty, ttheta, tv])
