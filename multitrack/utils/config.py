@@ -51,7 +51,7 @@ FOLLOWER_PROXIMITY_PENALTY = 20.0        # Heavy penalty factor for getting too 
 
 # MPPI controller settings
 MPPI_HORIZON = 35                       # Reduced from 30 for better performance
-MPPI_SAMPLES = 15000                      # Reduced from 1000 for better performance
+MPPI_SAMPLES = 15000                    # Reduced from 1000 for better performance
 MPPI_LAMBDA = 0.05                      # Temperature for softmax weighting - decreased for smoother control
 MPPI_WEIGHT_POSITION = 1.0              # Weight for position tracking
 MPPI_WEIGHT_HEADING = 0.5               # Weight for heading alignment
@@ -62,6 +62,9 @@ MPPI_USE_GPU = True                     # Enable GPU acceleration
 MPPI_GPU_BATCH_SIZE = 12288             # Process samples in batches for better GPU memory management (optimized for RTX A3000)
 MPPI_USE_ASYNC = True                   # Use asynchronous computation where possible
 MPPI_CACHE_SIZE = 5                     # Cache recent computations for reuse
+MPPI_MULTITHREAD_ENABLED = True         # Enable multithreading for CPU operations
+MPPI_THREAD_POOL_SIZE = 8               # Number of threads to use (None = auto-detect)
+MPPI_THREAD_CHUNK_SIZE = 1000           # Chunk size for dividing work among threads
 
 # Kalman filter settings
 KF_MEASUREMENT_INTERVAL = 0.5           # How often to take measurements (seconds)
@@ -114,6 +117,19 @@ STEERING_SPEED = 0.03           # How quickly steering angle changes
 # Vision cone rendering
 NUM_VISION_RAYS = 40            # Number of rays for vision cone
 VISION_TRANSPARENCY = 40        # Alpha value for vision cone (0-255)
+VISION_MULTITHREAD_ENABLED = True  # Enable multithreading for vision cone generation
+VISION_THREAD_POOL_SIZE = 4     # Number of threads to use for vision cone (None = auto-detect)
+VISION_THREAD_CHUNK_SIZE = 8    # Number of rays per thread chunk
+
+# Map Graph parameters
+MAP_GRAPH_GRID_SIZE = 120        # Resolution of the sampling grid (higher values = denser grid)
+MAP_GRAPH_MAX_EDGE_DISTANCE = 80  # Maximum distance for connecting nodes (lower = more precise paths)
+MAP_GRAPH_MAX_CONNECTIONS = 12    # Maximum connections per node (higher = denser graph)
+MAP_GRAPH_NODE_COLOR = (100, 100, 255)  # Color for graph nodes
+MAP_GRAPH_EDGE_COLOR = (50, 50, 200)    # Color for graph edges
+MAP_GRAPH_CACHE_ENABLED = True  # Whether to cache map graphs between runs
+MAP_GRAPH_CACHE_FILE = "map_graph_cache.pkl"  # File to store cached map graph
+MAP_GRAPH_MULTICORE_DEFAULT = True  # Use multicore processing by default
 
 # Particle effects
 PARTICLE_LIFETIME = 10          # How long particles last

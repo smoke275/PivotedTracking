@@ -15,7 +15,9 @@ import pygame
 from math import sin, cos, pi
 from collections import deque
 from multitrack.controllers.mppi_controller import MPPIController
-from multitrack.utils.vision import is_agent_in_vision_cone, get_vision_cone_points
+from multitrack.utils.vision import (
+    is_agent_in_vision_cone, get_vision_cone_points_multithreaded as get_vision_cone_points
+)
 from multitrack.utils.config import *
 from multitrack.filters.kalman_filter import UnicycleKalmanFilter
 

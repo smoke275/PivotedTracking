@@ -5,6 +5,8 @@ Adapted from the original vision.py file.
 
 import math
 import pygame
+import threading
+import concurrent.futures
 from multitrack.utils.config import *
 from multitrack.utils.geometry import (
     get_line_intersection, normalize_angle, get_angle_difference
@@ -181,6 +183,98 @@ def get_vision_cone_points(agent, vision_range, vision_angle, walls, doors):
         vision_points.append(hit_point)
     
     return vision_points
+
+def cast_ray_worker(params):
+    """
+    Worker function for casting rays in parallel threads.
+    
+    Args:
+        params: Tuple containing (ray_index, center_x, center_y, ray_angle, vision_range, walls, doors)
+        
+    Returns:
+        Tuple of (ray_index, hit_point) for ordering results
+    """
+    ray_index, center_x, center_y, ray_angle, vision_range, walls, doors = params
+    hit_point = cast_vision_ray(center_x, center_y, ray_angle, vision_range, walls, doors)
+    return (ray_index, hit_point)
+
+def get_vision_cone_points_threaded(agent, vision_range, vision_angle, walls, doors):
+    """
+    Get the points that define an agent's vision cone polygon using multiple threads.
+    
+    Args:
+        agent: Agent with state [x, y, theta, v]
+        vision_range: Maximum vision distance
+        vision_angle: Field of view angle (in radians)
+        walls: List of wall rectangles
+        doors: List of door rectangles
+        
+    Returns:
+        List of points defining the vision cone polygon
+    """
+    center_x, center_y = agent.state[0], agent.state[1]
+    orientation = agent.state[2]
+    
+    # Start with agent's position
+    vision_points = [(center_x, center_y)]
+    
+    # Calculate all ray angles first
+    ray_angles = []
+    for i in range(NUM_VISION_RAYS + 1):
+        ray_angle = orientation - vision_angle/2 + (vision_angle * i / NUM_VISION_RAYS)
+        ray_angles.append(ray_angle)
+    
+    # Set up thread pool size
+    if VISION_THREAD_POOL_SIZE is None:
+        num_workers = min(NUM_VISION_RAYS + 1, max(4, multiprocessing.cpu_count()))
+    else:
+        num_workers = min(NUM_VISION_RAYS + 1, VISION_THREAD_POOL_SIZE)
+    
+    # Prepare parameters for each ray
+    ray_params = []
+    for i, ray_angle in enumerate(ray_angles):
+        ray_params.append((i, center_x, center_y, ray_angle, vision_range, walls, doors))
+    
+    # Cast rays in parallel using a thread pool
+    hit_points = [None] * (NUM_VISION_RAYS + 1)  # Pre-allocate result list
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+        # Submit tasks in chunks for better performance
+        future_to_ray = {}
+        for i in range(0, len(ray_params), VISION_THREAD_CHUNK_SIZE):
+            chunk = ray_params[i:i + VISION_THREAD_CHUNK_SIZE]
+            for ray_param in chunk:
+                future = executor.submit(cast_ray_worker, ray_param)
+                future_to_ray[future] = ray_param[0]  # Store ray index
+        
+        # Collect results as they complete
+        for future in concurrent.futures.as_completed(future_to_ray):
+            ray_index, hit_point = future.result()
+            hit_points[ray_index] = hit_point
+    
+    # Add hit points to vision cone
+    vision_points.extend(hit_points)
+    
+    return vision_points
+
+def get_vision_cone_points_multithreaded(agent, vision_range, vision_angle, walls, doors):
+    """
+    Get vision cone points using the appropriate method (threaded or single-threaded).
+    
+    Args:
+        agent: Agent with state [x, y, theta, v]
+        vision_range: Maximum vision distance
+        vision_angle: Field of view angle (in radians)
+        walls: List of wall rectangles
+        doors: List of door rectangles
+        
+    Returns:
+        List of points defining the vision cone polygon
+    """
+    if VISION_MULTITHREAD_ENABLED:
+        return get_vision_cone_points_threaded(agent, vision_range, vision_angle, walls, doors)
+    else:
+        return get_vision_cone_points(agent, vision_range, vision_angle, walls, doors)
 
 def get_line_intersection(x1, y1, x2, y2, x3, y3, x4, y4):
     """

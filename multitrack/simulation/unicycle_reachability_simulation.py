@@ -16,6 +16,9 @@ from multitrack.visualizations.enhanced_rendering import (
 from multitrack.utils.config import *
 from multitrack.utils.vision import is_agent_in_vision_cone
 from multitrack.filters.kalman_filter import UnicycleKalmanFilter
+from multitrack.utils.map_graph import MapGraph  # Importing MapGraph
+import multiprocessing
+import time
 
 # Initialize pygame
 pygame.init()
@@ -44,7 +47,18 @@ MPPI_PREDICTION_COLOR = (255, 100, 100)  # Light red
 FOLLOWER_ENABLED = True  # Enable/disable follower agent
 
 # Main simulation loop
-def run_simulation():
+def run_simulation(multicore=None, num_cores=None):
+    """
+    Run the main simulation loop.
+    
+    Args:
+        multicore: Whether to use multicore processing for map generation (None = use config value)
+        num_cores: Number of CPU cores to use (None = all available)
+    """
+    # Determine whether to use multicore processing
+    if multicore is None:
+        multicore = MAP_GRAPH_MULTICORE_DEFAULT
+        
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
     pygame.display.set_caption("Visitor and Escort Simulation")
     clock = pygame.time.Clock()
@@ -55,6 +69,56 @@ def run_simulation():
     
     # Create environment
     environment = SimulationEnvironment(width=WIDTH, height=HEIGHT)
+    
+    # Create map graph with loading screen
+    map_graph = MapGraph(WIDTH, HEIGHT, environment.get_all_walls(), environment.get_doors())
+    
+    # Display loading screen and generate map graph
+    def update_loading_status(message, progress):
+        render_loading_screen(screen, message, progress)
+        pygame.event.pump()  # Process events to prevent "not responding"
+    
+    # Check if we can load from cache first
+    update_loading_status("Checking for cached map graph...", 0.0)
+    cache_loaded = False
+    
+    # Try to load from cache if enabled
+    if MAP_GRAPH_CACHE_ENABLED:
+        cache_loaded = map_graph.load_from_cache()
+        
+        if cache_loaded:
+            # Validate the cached graph against the current environment
+            update_loading_status("Validating cached map graph...", 0.3)
+            if not map_graph.validate_cached_graph():
+                print("Cached map graph validation failed. Generating new graph...")
+                cache_loaded = False
+            else:
+                update_loading_status("Cached map graph is valid", 1.0)
+                time.sleep(0.5)  # Brief pause to show completion
+    
+    # Generate map graph if not loaded from cache
+    if not cache_loaded:
+        update_loading_status("No valid cache found. Generating new map graph...", 0.0)
+        
+        # Use parallel processing if enabled
+        start_time = time.time()
+        cores_to_use = num_cores if num_cores else multiprocessing.cpu_count()
+        
+        if multicore:
+            print(f"Generating map graph using {cores_to_use} CPU cores...")
+            map_graph.generate_parallel(update_loading_status, cores_to_use)
+        else:
+            print("Generating map graph using single core...")
+            map_graph.generate(update_loading_status)
+        
+        generation_time = time.time() - start_time
+        print(f"Map graph generation completed in {generation_time:.2f} seconds")
+        print(f"Generated {len(map_graph.nodes)} nodes and {len(map_graph.edges)} edges")
+        
+        # Save to cache for future use if caching is enabled
+        if MAP_GRAPH_CACHE_ENABLED:
+            update_loading_status("Saving map graph to cache...", 0.95)
+            map_graph.save_to_cache()
     
     # Initialize models with environment information to ensure valid starting positions
     model = UnicycleModel(walls=environment.get_all_walls(), doors=environment.get_doors())
@@ -70,6 +134,10 @@ def run_simulation():
     show_fps = True
     debug_mode = False  # For visualizing turning radius
     enhanced_visuals = True  # Toggle for human-like rendering
+    
+    # Map graph display flag
+    show_map_graph = False
+    paused = False
     
     # Particle effects
     visitor_particles = []
@@ -186,6 +254,28 @@ def run_simulation():
                     # Toggle debug key messages in console
                     debug_key_messages = not debug_key_messages
                     print(f"Key message debugging {'enabled' if debug_key_messages else 'disabled'}")
+                elif event.key == pygame.K_g:
+                    # Toggle map graph display and pause the simulation
+                    show_map_graph = not show_map_graph
+                    paused = show_map_graph  # Pause when showing graph, unpause when hiding
+                    if show_map_graph:
+                        print("Simulation paused. Showing map graph.")
+                    else:
+                        print("Simulation resumed. Map graph hidden.")
+                elif event.key == pygame.K_r and show_map_graph:
+                    # Regenerate map graph with current config parameters when map is displayed
+                    print(f"Regenerating map graph with grid size: {MAP_GRAPH_GRID_SIZE}...")
+                    # Create new map graph with the current configuration parameters
+                    map_graph = MapGraph(WIDTH, HEIGHT, environment.get_all_walls(), environment.get_doors())
+                    # Display loading screen and generate graph
+                    if multicore:
+                        cores_to_use = num_cores if num_cores else multiprocessing.cpu_count()
+                        print(f"Regenerating map graph using {cores_to_use} CPU cores...")
+                        map_graph.generate_parallel(update_loading_status, cores_to_use)
+                    else:
+                        print("Regenerating map graph using single core...")
+                        map_graph.generate(update_loading_status)
+                    print(f"Map graph regenerated with {len(map_graph.nodes)} nodes and {len(map_graph.edges)} edges.")
         
         # Get keyboard input to control the unicycle
         keys = pygame.key.get_pressed()
@@ -284,97 +374,98 @@ def run_simulation():
             is_visitor_visible_combined = is_visitor_visible or is_visitor_visible_secondary
         
         # Update model with elapsed time - no Kalman filter here anymore
-        model.update(elapsed_time=elapsed_time, 
-                     walls=environment.get_all_walls(),
-                     doors=environment.get_doors(),
-                     is_visible=is_visitor_visible_combined)
-        
-        # Update follower agent with Kalman filter
-        if follower:
-            # Get the noisy measurement from the visitor
-            noisy_measurement = model.noisy_position  # [x, y, theta]
+        if not paused:
+            model.update(elapsed_time=elapsed_time, 
+                         walls=environment.get_all_walls(),
+                         doors=environment.get_doors(),
+                         is_visible=is_visitor_visible_combined)
             
-            # Update the Kalman filter in the escort agent - using combined visibility
-            # This allows the Kalman filter to be updated if visitor is seen by either camera
-            follower.update_kalman_filter(noisy_measurement, elapsed_time, is_visitor_visible_combined)
-            
-            # Determine which state to use for MPPI control
-            if is_visitor_visible_combined:
-                # When visible by either camera, directly track the noisy measurement
-                tracking_state = np.array([
-                    noisy_measurement[0],  # x from noisy measurement
-                    noisy_measurement[1],  # y from noisy measurement
-                    noisy_measurement[2],  # theta from noisy measurement
-                    0.0                   # Default velocity
-                ])
+            # Update follower agent with Kalman filter
+            if follower:
+                # Get the noisy measurement from the visitor
+                noisy_measurement = model.noisy_position  # [x, y, theta]
                 
-                # If visitor was previously lost and is now found again, update the info panel
-                if follower.search_timer >= follower.search_duration or not follower.kalman_filter_active:
-                    # This condition now handles:
-                    # 1. When search timer exceeded duration (standard case)
-                    # 2. When Kalman filter is inactive but we just regained vision (secondary camera case)
-                    follower.kalman_filter_active = True
-                    info_text.append("Visitor found! Kalman filter reactivated with new measurement.")
-                    
-                    # If the Kalman filter was reset, we need to reinitialize it with the new measurement
-                    if not follower.kalman_filter_active or follower.kalman_filter is None:
-                        # Reset with current measurement
-                        follower.kalman_filter = UnicycleKalmanFilter(
-                            np.array([
-                                noisy_measurement[0],
-                                noisy_measurement[1], 
-                                noisy_measurement[2],
-                                0.0  # Reset velocity
-                            ]), dt=0.1)
-                        follower.kalman_filter_active = True
-                        print("Kalman filter reinitialized from secondary camera visibility")
-                        
-                    # Restart MPPI when visitor is found by either camera
-                    # This is essential to ensure tracking resumes properly after a period without measurements
-                    print("Visitor detected by camera - reactivating MPPI controller.")
-                    follower.search_timer = 0  # Reset search timer
-            else:
-                # If not visible, use the Kalman estimate as best guess of where visitor might be,
-                # but ONLY if the Kalman filter is still active (not reset)
-                if follower.kalman_filter_active and follower.kalman_filter is not None:
+                # Update the Kalman filter in the escort agent - using combined visibility
+                # This allows the Kalman filter to be updated if visitor is seen by either camera
+                follower.update_kalman_filter(noisy_measurement, elapsed_time, is_visitor_visible_combined)
+                
+                # Determine which state to use for MPPI control
+                if is_visitor_visible_combined:
+                    # When visible by either camera, directly track the noisy measurement
                     tracking_state = np.array([
-                        follower.kalman_filter.state[0],  # x from Kalman filter
-                        follower.kalman_filter.state[1],  # y from Kalman filter
-                        follower.kalman_filter.state[2],  # theta from Kalman filter
-                        follower.kalman_filter.state[3]   # v from Kalman filter
+                        noisy_measurement[0],  # x from noisy measurement
+                        noisy_measurement[1],  # y from noisy measurement
+                        noisy_measurement[2],  # theta from noisy measurement
+                        0.0                   # Default velocity
                     ])
+                    
+                    # If visitor was previously lost and is now found again, update the info panel
+                    if follower.search_timer >= follower.search_duration or not follower.kalman_filter_active:
+                        # This condition now handles:
+                        # 1. When search timer exceeded duration (standard case)
+                        # 2. When Kalman filter is inactive but we just regained vision (secondary camera case)
+                        follower.kalman_filter_active = True
+                        info_text.append("Visitor found! Kalman filter reactivated with new measurement.")
+                        
+                        # If the Kalman filter was reset, we need to reinitialize it with the new measurement
+                        if not follower.kalman_filter_active or follower.kalman_filter is None:
+                            # Reset with current measurement
+                            follower.kalman_filter = UnicycleKalmanFilter(
+                                np.array([
+                                    noisy_measurement[0],
+                                    noisy_measurement[1], 
+                                    noisy_measurement[2],
+                                    0.0  # Reset velocity
+                                ]), dt=0.1)
+                            follower.kalman_filter_active = True
+                            print("Kalman filter reinitialized from secondary camera visibility")
+                            
+                        # Restart MPPI when visitor is found by either camera
+                        # This is essential to ensure tracking resumes properly after a period without measurements
+                        print("Visitor detected by camera - reactivating MPPI controller.")
+                        follower.search_timer = 0  # Reset search timer
                 else:
-                    # If Kalman filter has been deactivated, MPPI has no position estimate to use
-                    # Just use the last known position from the follower's memory
-                    if follower.last_seen_position is not None:
-                        # Use last seen position with default orientation
+                    # If not visible, use the Kalman estimate as best guess of where visitor might be,
+                    # but ONLY if the Kalman filter is still active (not reset)
+                    if follower.kalman_filter_active and follower.kalman_filter is not None:
                         tracking_state = np.array([
-                            follower.last_seen_position[0],  # x from last seen position
-                            follower.last_seen_position[1],  # y from last seen position
-                            follower.state[2],              # Use escort's current orientation
-                            0.0                             # Zero velocity (unknown)
+                            follower.kalman_filter.state[0],  # x from Kalman filter
+                            follower.kalman_filter.state[1],  # y from Kalman filter
+                            follower.kalman_filter.state[2],  # theta from Kalman filter
+                            follower.kalman_filter.state[3]   # v from Kalman filter
                         ])
                     else:
-                        # If no history at all, just use the escort's current position (shouldn't happen)
-                        tracking_state = follower.state.copy()
-                
-                # Check if search duration has just expired or continues to be expired
-                # This ensures the Kalman filter is reset and stays reset during extended periods without sight
-                if follower.search_timer >= follower.search_duration:
-                    # Only print message when first crossing the threshold
-                    if follower.search_timer == follower.search_duration:
-                        print("Search duration expired. Kalman filter reset and deactivated.")
-                        # Reset the MPPI controller when search duration expires
-                        follower.mppi.reset()
-                        print("MPPI controller reset due to search duration expiration.")
+                        # If Kalman filter has been deactivated, MPPI has no position estimate to use
+                        # Just use the last known position from the follower's memory
+                        if follower.last_seen_position is not None:
+                            # Use last seen position with default orientation
+                            tracking_state = np.array([
+                                follower.last_seen_position[0],  # x from last seen position
+                                follower.last_seen_position[1],  # y from last seen position
+                                follower.state[2],              # Use escort's current orientation
+                                0.0                             # Zero velocity (unknown)
+                            ])
+                        else:
+                            # If no history at all, just use the escort's current position (shouldn't happen)
+                            tracking_state = follower.state.copy()
                     
-                    # Reset and deactivate the Kalman filter when search duration expires or continues to be expired
-                    follower.reset_kalman_filter()
-            
-            # Update the follower agent with the appropriate tracking state
-            follower.update(dt=0.1, leader_state=tracking_state,
-                          walls=environment.get_all_walls(),
-                          doors=environment.get_doors())
+                    # Check if search duration has just expired or continues to be expired
+                    # This ensures the Kalman filter is reset and stays reset during extended periods without sight
+                    if follower.search_timer >= follower.search_duration:
+                        # Only print message when first crossing the threshold
+                        if follower.search_timer == follower.search_duration:
+                            print("Search duration expired. Kalman filter reset and deactivated.")
+                            # Reset the MPPI controller when search duration expires
+                            follower.mppi.reset()
+                            print("MPPI controller reset due to search duration expiration.")
+                        
+                        # Reset and deactivate the Kalman filter when search duration expires or continues to be expired
+                        follower.reset_kalman_filter()
+                
+                # Update the follower agent with the appropriate tracking state
+                follower.update(dt=0.1, leader_state=tracking_state,
+                              walls=environment.get_all_walls(),
+                              doors=environment.get_doors())
         
         # Get current time to update MPPI stats at regular intervals
         current_time = elapsed_time
@@ -387,6 +478,52 @@ def run_simulation():
         
         # Draw environment first (instead of just filling with black)
         environment.draw(screen, font)
+        
+        # Draw map graph if enabled
+        if show_map_graph:
+            # Draw the map graph with a message indicating the paused state
+            map_graph.draw(screen, show_nodes=True)
+            
+            # Display "PAUSED" message
+            pause_font = pygame.font.SysFont('Arial', 36)
+            pause_text = pause_font.render("SIMULATION PAUSED - Press G to Resume", True, (255, 255, 255))
+            pause_bg = pygame.Surface((pause_text.get_width() + 20, pause_text.get_height() + 10))
+            pause_bg.fill((0, 0, 0))
+            pause_bg.set_alpha(180)
+            
+            # Position at top center of screen
+            pause_x = (WIDTH - pause_text.get_width()) // 2
+            pause_y = 50
+            
+            # Draw background and text
+            screen.blit(pause_bg, (pause_x - 10, pause_y - 5))
+            screen.blit(pause_text, (pause_x, pause_y))
+            
+            # Display map graph stats
+            stats_font = pygame.font.SysFont('Arial', 20)
+            stats_text = [
+                f"Map Graph Parameters:",
+                f"Grid Size: {MAP_GRAPH_GRID_SIZE}",
+                f"Nodes: {len(map_graph.nodes)}",
+                f"Edges: {len(map_graph.edges)}",
+                f"Max Edge Distance: {MAP_GRAPH_MAX_EDGE_DISTANCE}",
+                f"Max Connections: {MAP_GRAPH_MAX_CONNECTIONS}"
+            ]
+            
+            # Draw stats background
+            stats_bg = pygame.Surface((300, len(stats_text) * 25 + 10))
+            stats_bg.fill((0, 0, 0))
+            stats_bg.set_alpha(180)
+            
+            # Position at bottom right of screen
+            stats_x = WIDTH - 310
+            stats_y = HEIGHT - len(stats_text) * 25 - 20
+            
+            # Draw background and text
+            screen.blit(stats_bg, (stats_x, stats_y))
+            for i, text in enumerate(stats_text):
+                text_surf = stats_font.render(text, True, (200, 200, 255))
+                screen.blit(text_surf, (stats_x + 10, stats_y + 10 + i * 25))
         
         # Draw standard representations for monitoring and predictions
         # (Keep the original drawing for predictions, uncertainty ellipses, etc.)
@@ -516,6 +653,51 @@ def run_simulation():
     
     pygame.quit()
     sys.exit()
+
+def render_loading_screen(screen, message, progress=0.0):
+    """
+    Render a loading screen with a progress bar.
+    
+    Args:
+        screen: Pygame surface to draw on
+        message: Message to display
+        progress: Progress value between 0.0 and 1.0
+    """
+    # Clear screen with a dark background
+    screen.fill((30, 30, 40))
+    
+    # Set up fonts
+    title_font = pygame.font.SysFont('Arial', 32)
+    message_font = pygame.font.SysFont('Arial', 24)
+    
+    # Draw title
+    title_text = "MultiTrack Simulation"
+    title_surf = title_font.render(title_text, True, (200, 200, 255))
+    screen.blit(title_surf, (WIDTH//2 - title_surf.get_width()//2, HEIGHT//4))
+    
+    # Draw message
+    message_surf = message_font.render(message, True, (255, 255, 255))
+    screen.blit(message_surf, (WIDTH//2 - message_surf.get_width()//2, HEIGHT//2 - 50))
+    
+    # Draw progress bar border
+    bar_width = WIDTH // 2
+    bar_height = 20
+    bar_x = WIDTH // 4
+    bar_y = HEIGHT // 2
+    pygame.draw.rect(screen, (100, 100, 100), (bar_x, bar_y, bar_width, bar_height), 2)
+    
+    # Draw progress bar fill
+    fill_width = int(bar_width * progress)
+    pygame.draw.rect(screen, (100, 200, 100), (bar_x, bar_y, fill_width, bar_height))
+    
+    # Draw percentage text
+    percent_text = f"{int(progress * 100)}%"
+    percent_font = pygame.font.SysFont('Arial', 18)
+    percent_surf = percent_font.render(percent_text, True, (255, 255, 255))
+    screen.blit(percent_surf, (WIDTH//2 - percent_surf.get_width()//2, bar_y + bar_height + 10))
+    
+    # Update display
+    pygame.display.flip()
 
 if __name__ == "__main__":
     run_simulation()

@@ -5,6 +5,7 @@ This implementation follows the MPPI algorithm for nonlinear systems,
 allowing an automated agent to optimally follow a target while respecting
 dynamics constraints of the unicycle model.
 GPU acceleration is used when available with optimized memory usage and batching.
+Multithreading is used for CPU operations to enhance performance even when GPU is available.
 """
 import os
 import sys
@@ -15,6 +16,9 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(os.path.dirna
 import numpy as np
 from math import sin, cos, pi, sqrt, atan2, exp
 import time
+import multiprocessing
+import concurrent.futures
+from functools import partial
 from collections import deque, namedtuple
 from multitrack.utils.config import *
 
@@ -211,6 +215,45 @@ class MPPIController:
                 current_time - entry.timestamp < 0.5):  # Only use fresh cache entries
                 return entry.control, entry.trajectory
                 
+        return None, None
+
+    def _parallel_cache_check(self, entry, current_state, target_trajectory, current_time):
+        """Helper function for parallel cache checking"""
+        if (self._is_similar_state(current_state, entry.state) and 
+            self._is_similar_target(target_trajectory, entry.target) and
+            current_time - entry.timestamp < 0.5):  # Only use fresh cache entries
+            return True
+        return False
+            
+    def _check_cache_parallel(self, current_state, target_trajectory):
+        """Check cache with parallel processing for faster lookup with large caches"""
+        if not MPPI_MULTITHREAD_ENABLED or len(self.computation_cache) < 3:
+            # Use sequential version for small caches
+            return self._check_cache(current_state, target_trajectory)
+            
+        current_time = time.time()
+        
+        # Use a thread pool to check cache entries in parallel
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = []
+            for entry in self.computation_cache:
+                # Create a future for each cache entry check
+                future = executor.submit(
+                    self._parallel_cache_check, 
+                    entry, 
+                    current_state, 
+                    target_trajectory, 
+                    current_time
+                )
+                futures.append((future, entry))
+            
+            # Check results as they complete
+            for future, entry in futures:
+                if future.result():
+                    # Found a match!
+                    return entry.control, entry.trajectory
+        
+        # No match found
         return None, None
 
     def _add_to_cache(self, current_state, target_trajectory, control, trajectory):
@@ -527,8 +570,12 @@ class MPPIController:
         # Start timing
         start_time = time.time()
         
-        # Check cache for similar computations to reuse
-        cached_control, cached_trajectory = self._check_cache(current_state, target_trajectory)
+        # Check cache for similar computations to reuse - use parallel version when appropriate
+        if MPPI_MULTITHREAD_ENABLED and len(self.computation_cache) >= 3:
+            cached_control, cached_trajectory = self._check_cache_parallel(current_state, target_trajectory)
+        else:
+            cached_control, cached_trajectory = self._check_cache(current_state, target_trajectory)
+            
         if cached_control is not None:
             # Cache hit! Return the cached results
             return cached_control, cached_trajectory
@@ -539,8 +586,14 @@ class MPPIController:
                 optimal_control, predicted_trajectory = self._compute_control_gpu(
                     current_state, target_trajectory, obstacles)
             else:
-                optimal_control, predicted_trajectory = self._compute_control_cpu(
-                    current_state, target_trajectory, obstacles)
+                if MPPI_MULTITHREAD_ENABLED:
+                    # Use multithreaded CPU implementation
+                    optimal_control, predicted_trajectory = self._compute_control_cpu_multithreaded(
+                        current_state, target_trajectory, obstacles)
+                else:
+                    # Use standard CPU implementation
+                    optimal_control, predicted_trajectory = self._compute_control_cpu(
+                        current_state, target_trajectory, obstacles)
                 
             # Add to cache for potential future reuse
             self._add_to_cache(current_state, target_trajectory, optimal_control, predicted_trajectory)
@@ -551,8 +604,12 @@ class MPPIController:
             # If we were using GPU, fall back to CPU
             if self.use_gpu:
                 print("Falling back to CPU computation")
-                optimal_control, predicted_trajectory = self._compute_control_cpu(
-                    current_state, target_trajectory, obstacles)
+                if MPPI_MULTITHREAD_ENABLED:
+                    optimal_control, predicted_trajectory = self._compute_control_cpu_multithreaded(
+                        current_state, target_trajectory, obstacles)
+                else:
+                    optimal_control, predicted_trajectory = self._compute_control_cpu(
+                        current_state, target_trajectory, obstacles)
             else:
                 # If already on CPU, re-raise the exception
                 raise
@@ -700,6 +757,103 @@ class MPPIController:
         weighted_controls = np.zeros((self.horizon, 2))
         for i in range(self.samples):
             weighted_controls += weights[i] * perturbed_controls[i]
+        
+        # Update nominal controls (shift and append)
+        self.nominal_controls = np.vstack([weighted_controls[1:], weighted_controls[-1:]])
+        
+        # Return first control and predicted trajectory
+        optimal_control = weighted_controls[0]
+        
+        # Compute the predicted trajectory using the updated nominal controls
+        predicted_trajectory = self._compute_rollout(current_state, self.nominal_controls)
+        
+        return optimal_control, predicted_trajectory
+    
+    def _compute_control_cpu_multithreaded(self, current_state, target_trajectory, obstacles=None):
+        """
+        Multithreaded CPU implementation of MPPI control computation
+        
+        Parameters:
+        - current_state: Current state [x, y, theta, v]
+        - target_trajectory: Sequence of target states to follow
+        - obstacles: List of obstacle positions [(x, y, radius), ...]
+        
+        Returns:
+        - optimal_control: Optimal control [v, omega] for the current time step
+        - predicted_trajectory: Predicted trajectory over the horizon
+        """
+        # Generate perturbed controls - using vectorized operations
+        perturbed_controls = np.zeros((self.samples, self.horizon, 2))
+        
+        # Sample noise once for all samples
+        noise = np.random.normal(0, 1, (self.samples, self.horizon, 2)) * \
+                self.control_noise_sigma.reshape(1, 1, 2)
+        
+        # Apply noise to nominal controls with vectorized operations
+        for i in range(self.samples):
+            perturbed_controls[i] = self.nominal_controls + noise[i]
+        
+        # Apply control limits - vectorized version
+        perturbed_controls[:, :, 0] = np.clip(
+            perturbed_controls[:, :, 0], 
+            self.control_limits['v_min'], 
+            self.control_limits['v_max']
+        )
+        perturbed_controls[:, :, 1] = np.clip(
+            perturbed_controls[:, :, 1], 
+            self.control_limits['omega_min'], 
+            self.control_limits['omega_max']
+        )
+        
+        # Compute all trajectories at once using vectorized implementation
+        all_states = self._compute_batch_rollouts(current_state, perturbed_controls)
+        
+        # Compute costs using multithreaded implementation
+        costs = self._compute_costs_multithreaded(all_states, target_trajectory, obstacles)
+        
+        # Compute weights using softmax - more numerically stable version
+        min_cost = np.min(costs)
+        weights = np.exp(-(costs - min_cost) / self.lambda_value)
+        weights = weights / np.sum(weights)  # Normalize
+        
+        # Compute weighted average of controls
+        weighted_controls = np.zeros((self.horizon, 2))
+        
+        # For large sample sizes, parallelize the weighted average computation
+        if self.samples > 5000 and MPPI_MULTITHREAD_ENABLED:
+            # Determine number of threads to use
+            if MPPI_THREAD_POOL_SIZE is None:
+                num_workers = max(4, min(multiprocessing.cpu_count(), 16))
+            else:
+                num_workers = MPPI_THREAD_POOL_SIZE
+                
+            # Chunk size - avoid too small chunks for efficiency
+            chunk_size = max(1, min(MPPI_THREAD_CHUNK_SIZE, self.samples // num_workers))
+            
+            # Prepare chunks of sample indices
+            sample_chunks = []
+            for i in range(0, self.samples, chunk_size):
+                end_idx = min(i + chunk_size, self.samples)
+                sample_chunks.append(list(range(i, end_idx)))
+                
+            # Function to compute weighted average for a chunk of samples
+            def compute_weighted_chunk(chunk_indices):
+                chunk_weighted = np.zeros((self.horizon, 2))
+                for idx in chunk_indices:
+                    chunk_weighted += weights[idx] * perturbed_controls[idx]
+                return chunk_weighted
+                
+            # Compute weighted average in parallel
+            chunk_results = []
+            with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+                futures = [executor.submit(compute_weighted_chunk, chunk) for chunk in sample_chunks]
+                for future in concurrent.futures.as_completed(futures):
+                    chunk_weighted = future.result()
+                    weighted_controls += chunk_weighted
+        else:
+            # Use sequential computation for smaller sample sizes
+            for i in range(self.samples):
+                weighted_controls += weights[i] * perturbed_controls[i]
         
         # Update nominal controls (shift and append)
         self.nominal_controls = np.vstack([weighted_controls[1:], weighted_controls[-1:]])
@@ -864,3 +1018,151 @@ class MPPIController:
         else:
             # Need to concatenate along the batch dimension
             return torch.cat(all_states_list, dim=0)
+    
+    def _compute_costs_chunk(self, sample_indices, all_states, target_trajectory, obstacles=None):
+        """
+        Compute costs for a chunk of trajectory samples - worker function for multithreading
+        
+        Parameters:
+        - sample_indices: Indices of samples to process
+        - all_states: Batch of state trajectories
+        - target_trajectory: Target states to follow
+        - obstacles: List of obstacle positions [(x, y, radius), ...]
+        
+        Returns:
+        - chunk_costs: Costs for the specified samples
+        """
+        chunk_size = len(sample_indices)
+        chunk_costs = np.zeros(chunk_size)
+        weights = self.cost_weights
+        
+        # Process each sample in this chunk
+        for local_idx, global_idx in enumerate(sample_indices):
+            sample_states = all_states[global_idx]
+            
+            # Compute costs for all time steps for this sample
+            for t in range(1, self.horizon + 1):  # Skip initial state
+                # Current state
+                x, y = sample_states[t, 0], sample_states[t, 1]
+                theta, v = sample_states[t, 2], sample_states[t, 3]
+                
+                # Previous velocity for control cost
+                prev_v = sample_states[t-1, 3] if t > 1 else 0.0
+                
+                # Target state at this time step (or closest available)
+                target_idx = min(t, len(target_trajectory) - 1)
+                tx, ty = target_trajectory[target_idx, 0], target_trajectory[target_idx, 1]
+                ttheta = target_trajectory[target_idx, 2]
+                tv = target_trajectory[target_idx, 3]  # Target velocity
+                
+                # Position cost
+                pos_cost = ((x - tx) ** 2 + (y - ty) ** 2) * weights['target_position']
+                
+                # Heading cost
+                heading_diff = (theta - ttheta + pi) % (2 * pi) - pi  # Normalize to [-pi, pi]
+                heading_cost = (heading_diff ** 2) * weights['target_heading']
+                
+                # Control effort cost
+                ctrl_cost = ((v - prev_v) ** 2) * weights['control_effort']
+                
+                # Forward incentive
+                forward_cost = 0.0
+                if v > 0:
+                    forward_cost = -v * weights['forward']  # Encourage forward motion
+                else:
+                    forward_cost = -v * weights['forward'] * 2  # Strongly penalize reversing
+                
+                # Stop cost for stationary targets
+                stop_cost = 0.0
+                if abs(tv) < 0.1:  # Target is stationary
+                    dist_to_target = sqrt((x - tx) ** 2 + (y - ty) ** 2)
+                    if dist_to_target < FOLLOWER_STOPPING_RADIUS:
+                        # Penalize non-zero velocity when close to stationary target
+                        stop_cost = abs(v) * weights['forward'] * 5.0
+                
+                # Proximity penalty
+                proximity_cost = 0.0
+                dist_to_visitor = sqrt((x - tx) ** 2 + (y - ty) ** 2)
+                if dist_to_visitor < FOLLOWER_SAFETY_DISTANCE:
+                    proximity_cost = (FOLLOWER_SAFETY_DISTANCE - dist_to_visitor)**2 * FOLLOWER_PROXIMITY_PENALTY
+                
+                # Sum all step costs
+                chunk_costs[local_idx] += pos_cost + heading_cost + ctrl_cost + forward_cost + stop_cost + proximity_cost
+            
+            # Handle obstacles
+            if obstacles is not None:
+                for t in range(1, self.horizon + 1):
+                    x = sample_states[t, 0]
+                    y = sample_states[t, 1]
+                    v = sample_states[t, 3]  # Get velocity
+                    
+                    for ox, oy, radius in obstacles:
+                        dist = sqrt((x - ox)**2 + (y - oy)**2)
+                        if dist < self.safety_distance:
+                            # Stronger cost for obstacle avoidance based on velocity
+                            vel_factor = 1.0 + abs(v) * 0.5  # Scale avoidance with velocity
+                            avoidance_cost = ((self.safety_distance - dist)**2) * weights['collision'] * vel_factor
+                            
+                            # Add exponential term for very close obstacles
+                            if dist < self.safety_distance * 0.5:
+                                avoidance_cost += ((self.safety_distance - dist)**3) * weights['collision'] * 2.0
+                                
+                            chunk_costs[local_idx] += avoidance_cost
+        
+        return chunk_costs
+    
+    def _compute_costs_multithreaded(self, all_states, target_trajectory, obstacles=None):
+        """
+        Compute costs for all trajectories using multiple threads
+        
+        Parameters:
+        - all_states: Batch of state trajectories
+        - target_trajectory: Target states to follow
+        - obstacles: List of obstacle positions [(x, y, radius), ...]
+        
+        Returns:
+        - total_costs: Cost for each trajectory sample
+        """
+        if not MPPI_MULTITHREAD_ENABLED:
+            # Fall back to non-threaded version
+            return self._compute_costs(all_states, target_trajectory, obstacles)
+        
+        # Determine number of threads to use
+        if MPPI_THREAD_POOL_SIZE is None:
+            num_workers = max(4, min(multiprocessing.cpu_count(), 16))
+        else:
+            num_workers = MPPI_THREAD_POOL_SIZE
+        
+        # Chunk size - avoid too small chunks for efficiency
+        chunk_size = max(1, min(MPPI_THREAD_CHUNK_SIZE, self.samples // num_workers))
+        
+        # Prepare chunks of sample indices
+        sample_chunks = []
+        for i in range(0, self.samples, chunk_size):
+            end_idx = min(i + chunk_size, self.samples)
+            sample_chunks.append(list(range(i, end_idx)))
+        
+        # Compute costs in parallel
+        results = []
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+            # Submit tasks
+            futures = []
+            for chunk in sample_chunks:
+                future = executor.submit(
+                    self._compute_costs_chunk,
+                    chunk,
+                    all_states,
+                    target_trajectory,
+                    obstacles
+                )
+                futures.append((future, chunk))
+            
+            # Collect results as they complete
+            all_costs = np.zeros(self.samples)
+            for future, chunk in concurrent.futures.as_completed([f for f, _ in futures]):
+                chunk_costs = future.result()
+                for local_idx, global_idx in enumerate(chunk):
+                    all_costs[global_idx] = chunk_costs[local_idx]
+        
+        return all_costs
