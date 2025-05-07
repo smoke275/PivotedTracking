@@ -141,3 +141,19 @@ The simulation provides rich visual feedback:
 2. The MPPI controller optimizes trajectories using GPU acceleration when available.
 3. The vision system uses ray casting for line-of-sight detection.
 4. Entropy calculation provides a single metric for tracking uncertainty.
+
+## Recent Updates
+
+### May 7, 2025: Improved Map Generation Responsiveness
+- Enhanced map graph generation to maintain UI responsiveness
+- Implemented adaptive chunking strategy for better load balancing
+- Added frequent UI event processing to prevent freezing
+- Optimized both sampling and connection phases with smaller work units
+- No reduction in processing power - still uses all available cores for maximum performance
+
+### Performance Options
+- **--multicore/-m**: Use multiple CPU cores for map generation (default: enabled)
+- **--single-core/-s**: Use only a single core for map generation
+- **--num-cores/-n**: Specify exact number of cores to use
+- **--limit-cores**: Set maximum number of cores to use (default: 16)
+- **--skip-cache**: Force regeneration of the map graph
