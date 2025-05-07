@@ -393,9 +393,22 @@ class MapGraph:
         # Create grid cell coordinates
         grid_coords = [(i, j) for i in range(self.grid_size) for j in range(self.grid_size)]
         
-        # Split work across cores
-        chunk_size = max(1, len(grid_coords) // num_cores)
-        chunks = [grid_coords[i:i + chunk_size] for i in range(0, len(grid_coords), chunk_size)]
+        # Process events to keep UI responsive before heavy processing
+        pygame.event.pump()
+        
+        # Calculate optimal chunk size - smaller chunks for better responsiveness
+        # Use more chunks than cores for better load balancing and responsiveness
+        total_cells = len(grid_coords)
+        chunks_per_core = 8  # Use multiple smaller chunks per core for better UI responsiveness
+        ideal_chunks = num_cores * chunks_per_core
+        chunk_size = max(1, total_cells // ideal_chunks)
+        chunks = [grid_coords[i:i + chunk_size] for i in range(0, total_cells, chunk_size)]
+        
+        if status_callback:
+            status_callback(f"Preparing to sample {total_cells} positions across {len(chunks)} chunks...", 0.1)
+            # Process events to keep UI responsive
+            pygame.event.pump()
+            time.sleep(0.05)  # Short sleep to allow UI updates
         
         # Create a pool of workers
         with multiprocessing.Pool(processes=num_cores) as pool:
@@ -406,13 +419,34 @@ class MapGraph:
                                  walls=self.walls,
                                  doors=self.doors)
             
-            # Process chunks in parallel with progress updates
+            # Process chunks in parallel with more frequent progress updates
             valid_positions = []
-            for i, chunk_result in enumerate(pool.imap(worker_func, chunks)):
+            total_chunks = len(chunks)
+            
+            # More frequent updates for better user feedback
+            update_interval = max(1, total_chunks // 50)  # Update about 50 times during processing
+            
+            for i, chunk_result in enumerate(pool.imap_unordered(worker_func, chunks)):
                 valid_positions.extend(chunk_result)
-                if status_callback:
-                    progress = 0.1 + 0.2 * ((i + 1) / len(chunks))
-                    status_callback(f"Sampling nodes: {len(valid_positions)} valid nodes found...", progress)
+                
+                # More frequent status updates with UI event processing
+                if status_callback and (i % update_interval == 0 or i == total_chunks - 1):
+                    progress = 0.1 + 0.2 * ((i + 1) / total_chunks)
+                    status_callback(f"Sampling nodes: {len(valid_positions)} valid nodes found ({i+1}/{total_chunks} chunks)...", progress)
+                    # Process events to keep UI responsive - CRITICAL for preventing freezing
+                    pygame.event.pump()
+                    
+                    # Brief pause every few chunks to allow the main thread to process
+                    if i % (update_interval * 4) == 0:
+                        time.sleep(0.01)  # Very brief sleep to yield to main thread
+        
+        # Process events again after intensive processing
+        pygame.event.pump()
+        
+        if status_callback:
+            status_callback(f"Sampling complete: Found {len(valid_positions)} valid nodes", 0.3)
+            # Process events to keep UI responsive
+            pygame.event.pump()
         
         # Store valid positions as nodes
         self.nodes = valid_positions
@@ -423,6 +457,9 @@ class MapGraph:
             x = door.x + door.width / 2
             y = door.y + door.height / 2
             self.nodes.append((x, y))
+            
+        # Process events one final time before returning
+        pygame.event.pump()
     
     @staticmethod
     def _process_positions_chunk(coords_chunk, cell_width, cell_height, walls, doors):
@@ -464,26 +501,66 @@ class MapGraph:
         """Connect nodes based on line-of-sight visibility using parallel processing"""
         num_nodes = len(self.nodes)
         
+        if status_callback:
+            status_callback(f"Preparing to connect {num_nodes} nodes...", 0.3)
+            # Process events to keep UI responsive
+            pygame.event.pump()
+            time.sleep(0.05)
+        
         # Create node pairs for visibility checking
         node_pairs = []
+        pair_count = 0
+        
+        # Show progress during node pair generation which can be slow for large maps
+        total_possible_pairs = (num_nodes * (num_nodes - 1)) // 2
+        status_update_interval = max(1, total_possible_pairs // 50)  # More frequent updates (50 instead of 20)
+        
+        # Process events frequently during the pair generation phase
         for i in range(num_nodes):
             for j in range(i + 1, num_nodes):
                 # Get node positions
                 node1 = self.nodes[i]
                 node2 = self.nodes[j]
                 
+                # Show progress more frequently during this potentially time-consuming step
+                pair_count += 1
+                if status_callback and pair_count % status_update_interval == 0:
+                    progress_percent = pair_count / total_possible_pairs
+                    status_callback(f"Preparing node pairs: {pair_count:,}/{total_possible_pairs:,} ({progress_percent:.1%})", 0.3)
+                    # Process events to keep UI responsive - critical for preventing freezes
+                    pygame.event.pump()
+                    
+                    # Add a very brief sleep periodically to allow the main thread to process
+                    if pair_count % (status_update_interval * 5) == 0:
+                        time.sleep(0.01)
+                    
                 # Check distance first (don't connect nodes that are too far apart)
                 distance = sqrt((node1[0] - node2[0])**2 + (node1[1] - node2[1])**2)
                 if distance <= MAP_GRAPH_MAX_EDGE_DISTANCE:
                     node_pairs.append((i, j, node1, node2))
         
-        # Split work across cores
-        chunk_size = max(1, len(node_pairs) // num_cores)
+        if status_callback:
+            status_callback(f"Found {len(node_pairs):,} potential connections to check...", 0.35)
+            # Process events to keep UI responsive
+            pygame.event.pump()
+            time.sleep(0.05)
+        
+        # Split work into smaller chunks for better load balancing and UI responsiveness
+        # More chunks = more frequent updates = more responsive UI
+        chunks_per_core = 8  # Multiple chunks per core for better load balancing
+        ideal_chunks = num_cores * chunks_per_core
+        chunk_size = max(1, len(node_pairs) // ideal_chunks)
         chunks = [node_pairs[i:i + chunk_size] for i in range(0, len(node_pairs), chunk_size)]
         
         # Initialize adjacency lists
         for i in range(num_nodes):
             self.adjacency[i] = []
+        
+        if status_callback:
+            status_callback(f"Processing {len(chunks)} chunks across {num_cores} cores...", 0.4)
+            # Process events to keep UI responsive
+            pygame.event.pump()
+            time.sleep(0.05)
         
         # Create a pool of workers
         with multiprocessing.Pool(processes=num_cores) as pool:
@@ -492,14 +569,34 @@ class MapGraph:
                                  walls=self.walls,
                                  doors=self.doors)
             
-            # Process chunks in parallel with progress updates
+            # Process chunks in parallel with more frequent progress updates
             all_edges = []
             total_chunks = len(chunks)
-            for i, chunk_result in enumerate(pool.imap(worker_func, chunks)):
+            
+            # More frequent updates (using imap_unordered for better load balancing)
+            update_interval = max(1, total_chunks // 100)  # Update more frequently
+            
+            for i, chunk_result in enumerate(pool.imap_unordered(worker_func, chunks)):
                 all_edges.extend(chunk_result)
-                if status_callback:
-                    progress = 0.3 + 0.5 * ((i + 1) / total_chunks)
-                    status_callback(f"Connecting nodes: {i+1}/{total_chunks} chunks processed", progress)
+                
+                # More frequent status updates with UI event processing
+                if status_callback and (i % update_interval == 0 or i == total_chunks - 1):
+                    progress = 0.4 + 0.4 * ((i + 1) / total_chunks)
+                    status_callback(f"Connecting nodes: {i+1}/{total_chunks} chunks ({((i+1)/total_chunks):.1%})", progress)
+                    # Process events to keep UI responsive
+                    pygame.event.pump()
+                    
+                    # Brief pause periodically to allow main thread to process
+                    if i % (update_interval * 5) == 0:
+                        time.sleep(0.01)
+        
+        # Process events again after intensive processing
+        pygame.event.pump()
+        
+        if status_callback:
+            status_callback(f"Found {len(all_edges):,} valid connections...", 0.8)
+            # Process events to keep UI responsive
+            pygame.event.pump()
         
         # Update edges and adjacency lists
         self.edges = all_edges
