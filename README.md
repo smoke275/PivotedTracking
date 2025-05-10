@@ -144,6 +144,12 @@ The simulation provides rich visual feedback:
 
 ## Recent Updates
 
+### May 10, 2025: Threaded Information Overlay System
+- Moved information overlay rendering to a separate thread
+- Improved performance by decoupling visualization from simulation logic
+- Enhanced transparency handling for better visual clarity
+- Added thread-safe communication between simulation and visualization systems
+
 ### May 7, 2025: Improved Map Generation Responsiveness
 - Enhanced map graph generation to maintain UI responsiveness
 - Implemented adaptive chunking strategy for better load balancing

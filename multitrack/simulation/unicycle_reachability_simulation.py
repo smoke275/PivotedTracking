@@ -13,6 +13,7 @@ from multitrack.models.simulation_environment import SimulationEnvironment
 from multitrack.visualizations.enhanced_rendering import (
     draw_enhanced_agent, generate_particles, update_particles, draw_particles
 )
+from multitrack.visualizations.information_overlay import InformationOverlayThread
 from multitrack.utils.config import *
 from multitrack.utils.vision import is_agent_in_vision_cone
 from multitrack.filters.kalman_filter import UnicycleKalmanFilter
@@ -63,6 +64,10 @@ def run_simulation(multicore=None, num_cores=None):
     pygame.display.set_caption("Visitor and Escort Simulation")
     clock = pygame.time.Clock()
     font = pygame.font.SysFont('Arial', 16)
+    
+    # Create and start the information overlay thread
+    overlay = InformationOverlayThread(WIDTH, HEIGHT)
+    overlay.start()
     
     # Monitoring options
     global SHOW_PREDICTIONS, SHOW_UNCERTAINTY, SHOW_MPPI_PREDICTIONS, FOLLOWER_ENABLED
@@ -405,7 +410,6 @@ def run_simulation(multicore=None, num_cores=None):
                         # 1. When search timer exceeded duration (standard case)
                         # 2. When Kalman filter is inactive but we just regained vision (secondary camera case)
                         follower.kalman_filter_active = True
-                        info_text.append("Visitor found! Kalman filter reactivated with new measurement.")
                         
                         # If the Kalman filter was reset, we need to reinitialize it with the new measurement
                         if not follower.kalman_filter_active or follower.kalman_filter is None:
@@ -570,7 +574,7 @@ def run_simulation(multicore=None, num_cores=None):
         avg_frame_time = sum(frame_times) / len(frame_times)
         fps = int(1000 / max(1, avg_frame_time))
         
-        # Display info
+        # Prepare info text for overlay
         info_text = [
             f"Controls: Arrow keys to move, ESC to quit",
             f"Visitor: ({int(model.state[0])}, {int(model.state[1])}), Heading: {model.state[2]:.2f}",
@@ -605,51 +609,31 @@ def run_simulation(multicore=None, num_cores=None):
         if show_fps:
             info_text.append(f"FPS: {fps} (Avg frame time: {avg_frame_time:.1f}ms)")
         
-        # Calculate text panel height to ensure all text is visible
-        text_panel_height = len(info_text) * 20 + 10  # 20px per line + 10px padding
+        # Update the information overlay with current data
+        overlay.update_data(
+            info_text=info_text,
+            title_text="Visitor with Escort Simulation",
+            mppi_stats=mppi_stats,
+            key_debug=key_debug,
+            keys=keys,
+            show_fps=show_fps,
+            fps=fps,
+            avg_frame_time=avg_frame_time
+        )
         
-        # Draw text background for better readability (with higher transparency)
-        info_bg = pygame.Surface((WIDTH, text_panel_height))
-        info_bg.fill(BLACK)
-        info_bg.set_alpha(120)  # Make much more transparent (lower alpha value)
-        screen.blit(info_bg, (0, HEIGHT - text_panel_height))
-        
-        # Display text with adjusted starting position to ensure all lines are visible
-        for i, text in enumerate(info_text):
-            text_surf = font.render(text, True, WHITE)
-            screen.blit(text_surf, (10, HEIGHT - text_panel_height + 5 + i*20))
-        
-        # Draw title
-        title_text = "Visitor with Escort Simulation"
-        title = font.render(title_text, True, WHITE)
-        screen.blit(title, (WIDTH//2 - title.get_width()//2, 10))
-        
-        # Display key state monitoring if enabled
-        if key_debug:
-            key_monitor_text = [
-                "KEY STATE MONITOR:",
-                f"Arrow keys: UP={keys[pygame.K_UP]} DOWN={keys[pygame.K_DOWN]} LEFT={keys[pygame.K_LEFT]} RIGHT={keys[pygame.K_RIGHT]}",
-                f"WASD keys: W={keys[pygame.K_w]} A={keys[pygame.K_a]} S={keys[pygame.K_s]} D={keys[pygame.K_d]}",
-                f"Function keys: K={keys[pygame.K_k]} U={keys[pygame.K_u]} T={keys[pygame.K_t]} M={keys[pygame.K_m]} C={keys[pygame.K_c]} V={keys[pygame.K_v]} F={keys[pygame.K_f]}",
-                f"Special keys: PLUS={keys[pygame.K_PLUS]} EQUALS={keys[pygame.K_EQUALS]} MINUS={keys[pygame.K_MINUS]} SHIFT={bool(pygame.key.get_mods() & pygame.KMOD_SHIFT)}"
-            ]
-            
-            # Draw background for key monitor
-            key_bg = pygame.Surface((400, 120))
-            key_bg.fill((50, 50, 50))
-            key_bg.set_alpha(200)
-            screen.blit(key_bg, (20, 20))
-            
-            # Display key state text
-            for i, text in enumerate(key_monitor_text):
-                key_text = font.render(text, True, (255, 255, 255))
-                screen.blit(key_text, (30, 30 + i*20))
+        # Get and draw the overlay surface
+        overlay_surface = overlay.get_surface()
+        if overlay_surface:
+            screen.blit(overlay_surface, (0, 0))
         
         # Update display
         pygame.display.flip()
         
         # Control framerate
         clock.tick(60)
+    
+    # Cleanup - stop the overlay thread before quitting
+    overlay.stop()
     
     pygame.quit()
     sys.exit()
