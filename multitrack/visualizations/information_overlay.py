@@ -1,6 +1,6 @@
 """
-Information overlay module for displaying text and statistics independently.
-This module provides a threaded approach to displaying information overlays
+Information sidebar module for displaying text and statistics independently.
+This module provides a threaded approach to displaying information on a sidebar
 and statistics without blocking the main simulation.
 """
 
@@ -10,25 +10,27 @@ import time
 import queue
 from multitrack.utils.config import *
 
-class InformationOverlayThread:
+class InformationSidebarThread:
     """
-    A thread-based information overlay system for displaying information
+    A thread-based information sidebar system for displaying information
     without blocking the main simulation thread.
     """
-    def __init__(self, screen_width, screen_height):
+    def __init__(self, screen_width, screen_height, sidebar_width=250):
         """
-        Initialize the information overlay thread.
+        Initialize the information sidebar thread.
         
         Args:
-            screen_width: Width of the screen
+            screen_width: Width of the main screen (environment)
             screen_height: Height of the screen
+            sidebar_width: Width of the sidebar (default: 250 pixels)
         """
         self.screen_width = screen_width
         self.screen_height = screen_height
+        self.sidebar_width = sidebar_width
         self.running = False
         self.thread = None
         self.data_queue = queue.Queue()
-        self.overlay_surface = None
+        self.sidebar_surface = None
         self.font_normal = None
         self.font_title = None
         self.font_stats = None
@@ -46,7 +48,7 @@ class InformationOverlayThread:
         self.avg_frame_time = 0
         
     def start(self):
-        """Start the overlay thread"""
+        """Start the sidebar thread"""
         if self.thread is not None and self.thread.is_alive():
             return
             
@@ -55,7 +57,7 @@ class InformationOverlayThread:
         self.thread.start()
         
     def stop(self):
-        """Stop the overlay thread"""
+        """Stop the sidebar thread"""
         self.running = False
         if self.thread is not None:
             self.thread.join(timeout=1.0)
@@ -71,18 +73,18 @@ class InformationOverlayThread:
         self.font_title = pygame.font.SysFont('Arial', 20)
         self.font_stats = pygame.font.SysFont('Arial', 20)
         
-        # Create overlay surface
-        self.overlay_surface = pygame.Surface((self.screen_width, self.screen_height), pygame.SRCALPHA)
+        # Create sidebar surface - only for the sidebar area
+        self.sidebar_surface = pygame.Surface((self.sidebar_width, self.screen_height), pygame.SRCALPHA)
         
         # Main thread loop
         while self.running:
             # Process any pending data updates
             self._process_queue()
             
-            # Check if it's time to update the overlay
+            # Check if it's time to update the sidebar
             current_time = time.time()
             if current_time - self.last_update_time >= self.update_interval:
-                self._render_overlay()
+                self._render_sidebar()
                 self.last_update_time = current_time
                 
             # Small sleep to prevent 100% CPU usage
@@ -103,36 +105,27 @@ class InformationOverlayThread:
         except queue.Empty:
             pass
             
-    def _render_overlay(self):
-        """Render the overlay information"""
-        # Clear overlay surface with a completely transparent background
-        self.overlay_surface.fill((0, 0, 0, 0))
+    def _render_sidebar(self):
+        """Render the sidebar information"""
+        # Fill sidebar with a semi-transparent dark background
+        self.sidebar_surface.fill((30, 30, 30, 230))
         
-        # Draw text information at the bottom
-        if self.info_text:
-            # Calculate text panel height
-            text_panel_height = len(self.info_text) * 20 + 10  # 20px per line + 10px padding
-            
-            # Create a semi-transparent background surface with proper alpha channel
-            info_bg = pygame.Surface((self.screen_width, text_panel_height), pygame.SRCALPHA)
-            info_bg.fill((0, 0, 0, 120))  # Black with 120/255 alpha (semi-transparent)
-            self.overlay_surface.blit(info_bg, (0, self.screen_height - text_panel_height))
-            
-            # Draw text lines
-            for i, text in enumerate(self.info_text):
-                text_surf = self.font_normal.render(text, True, (255, 255, 255))
-                self.overlay_surface.blit(text_surf, (10, self.screen_height - text_panel_height + 5 + i*20))
+        # Add a thin border on the left side
+        pygame.draw.line(self.sidebar_surface, (80, 80, 80), (0, 0), (0, self.screen_height), 2)
         
-        # Draw title at the top with semi-transparent background
+        current_y = 10  # Starting y position
+        
+        # Draw title at the top
         if self.title_text:
             title = self.font_title.render(self.title_text, True, (255, 255, 255))
-            # Create small semi-transparent background for the title
-            title_bg_width = title.get_width() + 20
-            title_bg = pygame.Surface((title_bg_width, 30), pygame.SRCALPHA)
-            title_bg.fill((0, 0, 0, 80))  # Very light black background
-            title_bg_x = self.screen_width//2 - title_bg_width//2
-            self.overlay_surface.blit(title_bg, (title_bg_x, 5))
-            self.overlay_surface.blit(title, (self.screen_width//2 - title.get_width()//2, 10))
+            title_x = self.sidebar_width // 2 - title.get_width() // 2
+            self.sidebar_surface.blit(title, (title_x, current_y))
+            current_y += 35  # Move down for next element
+            
+            # Add separator line
+            pygame.draw.line(self.sidebar_surface, (100, 100, 100), 
+                            (10, current_y), (self.sidebar_width - 10, current_y), 1)
+            current_y += 15
         
         # Draw key state monitoring if enabled
         if self.key_debug and self.keys:
@@ -144,31 +137,72 @@ class InformationOverlayThread:
                 f"Special keys: PLUS={self.keys[pygame.K_PLUS] if pygame.K_PLUS in self.keys else self.keys[pygame.K_EQUALS]} EQUALS={self.keys[pygame.K_EQUALS]} MINUS={self.keys[pygame.K_MINUS]} SHIFT={bool(pygame.key.get_mods() & pygame.KMOD_SHIFT)}"
             ]
             
-            # Create semi-transparent background for key monitor with proper alpha
-            key_bg = pygame.Surface((400, 120), pygame.SRCALPHA)
-            key_bg.fill((50, 50, 50, 180))  # Semi-transparent gray
-            self.overlay_surface.blit(key_bg, (20, 20))
-            
             # Draw key state text
             for i, text in enumerate(key_monitor_text):
                 key_text = self.font_normal.render(text, True, (255, 255, 255))
-                self.overlay_surface.blit(key_text, (30, 30 + i*20))
+                
+                # Handle text that's too wide for the sidebar by wrapping or clipping
+                if key_text.get_width() > self.sidebar_width - 20:
+                    # Simple clipping solution - you could implement text wrapping here
+                    key_text = self.font_normal.render(text[:30] + "...", True, (255, 255, 255))
+                
+                self.sidebar_surface.blit(key_text, (10, current_y))
+                current_y += 20
+            
+            current_y += 10  # Add some space after the key monitor
+            # Add separator line
+            pygame.draw.line(self.sidebar_surface, (100, 100, 100), 
+                           (10, current_y), (self.sidebar_width - 10, current_y), 1)
+            current_y += 15
+        
+        # Display FPS if enabled
+        if self.show_fps:
+            fps_text = f"FPS: {self.fps:.1f} | Frame time: {self.avg_frame_time*1000:.1f}ms"
+            fps_surf = self.font_normal.render(fps_text, True, (200, 200, 100))
+            self.sidebar_surface.blit(fps_surf, (10, current_y))
+            current_y += 25
+        
+        # Draw text information 
+        if self.info_text:
+            for i, text in enumerate(self.info_text):
+                text_surf = self.font_normal.render(text, True, (255, 255, 255))
+                
+                # Handle text that's too wide for the sidebar
+                if text_surf.get_width() > self.sidebar_width - 20:
+                    # Simple clipping solution
+                    text_surf = self.font_normal.render(text[:30] + "...", True, (255, 255, 255))
+                
+                self.sidebar_surface.blit(text_surf, (10, current_y))
+                current_y += 20
+                
+                # If we're running out of space in the sidebar, stop rendering
+                if current_y > self.screen_height - 10:
+                    break
                 
     def update_data(self, **kwargs):
         """
-        Update overlay data from the main thread.
+        Update sidebar data from the main thread.
         
         Args:
             **kwargs: Keyword arguments containing data to update
         """
-        # Put data in the queue for the overlay thread to process
+        # Put data in the queue for the sidebar thread to process
         self.data_queue.put(kwargs)
         
     def get_surface(self):
         """
-        Get the current overlay surface to blit onto the main screen.
+        Get the current sidebar surface to blit onto the main screen.
         
         Returns:
-            The overlay surface, or None if not initialized
+            The sidebar surface, or None if not initialized
         """
-        return self.overlay_surface
+        return self.sidebar_surface
+        
+    def get_width(self):
+        """
+        Get the width of the sidebar.
+        
+        Returns:
+            The width of the sidebar in pixels
+        """
+        return self.sidebar_width

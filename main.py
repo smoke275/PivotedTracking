@@ -44,9 +44,21 @@ if __name__ == "__main__":
     args = parse_arguments()
     
     # Apply settings to simulation
+    from multitrack.simulation.unicycle_reachability_simulation import (
+        ENVIRONMENT_WIDTH, ENVIRONMENT_HEIGHT, SIDEBAR_WIDTH, WIDTH, HEIGHT
+    )
+    
+    # Note: We only need to override ENVIRONMENT_WIDTH and ENVIRONMENT_HEIGHT
+    # as WIDTH and HEIGHT will be automatically calculated based on the sidebar width
     from multitrack.simulation.unicycle_reachability_simulation import WIDTH as sim_WIDTH, HEIGHT as sim_HEIGHT
-    sim_WIDTH = args.width
+    sim_WIDTH = args.width  # This will become the environment width
     sim_HEIGHT = args.height
+    
+    # Update the constants in the simulation module
+    import multitrack.simulation.unicycle_reachability_simulation as sim
+    sim.ENVIRONMENT_WIDTH = args.width
+    sim.ENVIRONMENT_HEIGHT = args.height
+    sim.WIDTH = args.width + sim.SIDEBAR_WIDTH  # Total width includes sidebar
     
     # Handle the single-core flag (overrides multicore)
     if args.single_core:

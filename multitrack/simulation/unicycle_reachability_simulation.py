@@ -13,7 +13,7 @@ from multitrack.models.simulation_environment import SimulationEnvironment
 from multitrack.visualizations.enhanced_rendering import (
     draw_enhanced_agent, generate_particles, update_particles, draw_particles
 )
-from multitrack.visualizations.information_overlay import InformationOverlayThread
+from multitrack.visualizations.information_overlay import InformationSidebarThread
 from multitrack.utils.config import *
 from multitrack.utils.vision import is_agent_in_vision_cone
 from multitrack.filters.kalman_filter import UnicycleKalmanFilter
@@ -25,7 +25,12 @@ import time
 pygame.init()
 
 # Constants
-WIDTH, HEIGHT = 1280, 720  # Increased from 800x600 to 1280x720
+SIDEBAR_WIDTH = 250  # Width of the information sidebar
+ENVIRONMENT_WIDTH = 1280  # Width of the environment area
+ENVIRONMENT_HEIGHT = 720  # Height of the environment area
+WIDTH = ENVIRONMENT_WIDTH + SIDEBAR_WIDTH  # Total window width including sidebar
+HEIGHT = ENVIRONMENT_HEIGHT  # Window height
+
 WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
 RED = (255, 0, 0)
@@ -65,18 +70,18 @@ def run_simulation(multicore=None, num_cores=None):
     clock = pygame.time.Clock()
     font = pygame.font.SysFont('Arial', 16)
     
-    # Create and start the information overlay thread
-    overlay = InformationOverlayThread(WIDTH, HEIGHT)
+    # Create and start the information sidebar thread
+    overlay = InformationSidebarThread(WIDTH, HEIGHT, SIDEBAR_WIDTH)
     overlay.start()
     
     # Monitoring options
     global SHOW_PREDICTIONS, SHOW_UNCERTAINTY, SHOW_MPPI_PREDICTIONS, FOLLOWER_ENABLED
     
     # Create environment
-    environment = SimulationEnvironment(width=WIDTH, height=HEIGHT)
+    environment = SimulationEnvironment(width=ENVIRONMENT_WIDTH, height=ENVIRONMENT_HEIGHT)
     
-    # Create map graph with loading screen
-    map_graph = MapGraph(WIDTH, HEIGHT, environment.get_all_walls(), environment.get_doors())
+    # Create map graph with loading screen - use environment dimensions only
+    map_graph = MapGraph(ENVIRONMENT_WIDTH, ENVIRONMENT_HEIGHT, environment.get_all_walls(), environment.get_doors())
     
     # Display loading screen and generate map graph
     def update_loading_status(message, progress):
@@ -271,7 +276,7 @@ def run_simulation(multicore=None, num_cores=None):
                     # Regenerate map graph with current config parameters when map is displayed
                     print(f"Regenerating map graph with grid size: {MAP_GRAPH_GRID_SIZE}...")
                     # Create new map graph with the current configuration parameters
-                    map_graph = MapGraph(WIDTH, HEIGHT, environment.get_all_walls(), environment.get_doors())
+                    map_graph = MapGraph(ENVIRONMENT_WIDTH, ENVIRONMENT_HEIGHT, environment.get_all_walls(), environment.get_doors())
                     # Display loading screen and generate graph
                     if multicore:
                         cores_to_use = num_cores if num_cores else multiprocessing.cpu_count()
@@ -624,7 +629,8 @@ def run_simulation(multicore=None, num_cores=None):
         # Get and draw the overlay surface
         overlay_surface = overlay.get_surface()
         if overlay_surface:
-            screen.blit(overlay_surface, (0, 0))
+            # Position the sidebar on the right side of the screen in its dedicated space
+            screen.blit(overlay_surface, (ENVIRONMENT_WIDTH, 0))
         
         # Update display
         pygame.display.flip()
@@ -654,19 +660,22 @@ def render_loading_screen(screen, message, progress=0.0):
     title_font = pygame.font.SysFont('Arial', 32)
     message_font = pygame.font.SysFont('Arial', 24)
     
+    # Calculate center position of the environment area (not including sidebar)
+    env_center_x = ENVIRONMENT_WIDTH // 2
+    
     # Draw title
     title_text = "MultiTrack Simulation"
     title_surf = title_font.render(title_text, True, (200, 200, 255))
-    screen.blit(title_surf, (WIDTH//2 - title_surf.get_width()//2, HEIGHT//4))
+    screen.blit(title_surf, (env_center_x - title_surf.get_width()//2, HEIGHT//4))
     
     # Draw message
     message_surf = message_font.render(message, True, (255, 255, 255))
-    screen.blit(message_surf, (WIDTH//2 - message_surf.get_width()//2, HEIGHT//2 - 50))
+    screen.blit(message_surf, (env_center_x - message_surf.get_width()//2, HEIGHT//2 - 50))
     
-    # Draw progress bar border
-    bar_width = WIDTH // 2
+    # Draw progress bar border - centered in environment area
+    bar_width = ENVIRONMENT_WIDTH // 2
     bar_height = 20
-    bar_x = WIDTH // 4
+    bar_x = ENVIRONMENT_WIDTH // 4
     bar_y = HEIGHT // 2
     pygame.draw.rect(screen, (100, 100, 100), (bar_x, bar_y, bar_width, bar_height), 2)
     
@@ -678,7 +687,7 @@ def render_loading_screen(screen, message, progress=0.0):
     percent_text = f"{int(progress * 100)}%"
     percent_font = pygame.font.SysFont('Arial', 18)
     percent_surf = percent_font.render(percent_text, True, (255, 255, 255))
-    screen.blit(percent_surf, (WIDTH//2 - percent_surf.get_width()//2, bar_y + bar_height + 10))
+    screen.blit(percent_surf, (env_center_x - percent_surf.get_width()//2, bar_y + bar_height + 10))
     
     # Update display
     pygame.display.flip()
