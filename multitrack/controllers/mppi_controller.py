@@ -21,6 +21,7 @@ import concurrent.futures
 from functools import partial
 from collections import deque, namedtuple
 from multitrack.utils.config import *
+from multitrack.controllers.base_controller import BaseController
 
 # Try importing torch for GPU acceleration
 try:
@@ -62,7 +63,7 @@ except ImportError:
 # Create a cache entry type for storing previous computations
 CacheEntry = namedtuple('CacheEntry', ['state', 'target', 'control', 'trajectory', 'timestamp'])
 
-class MPPIController:
+class MPPIController(BaseController):
     def __init__(self, horizon=MPPI_HORIZON, samples=MPPI_SAMPLES, dt=0.1, 
                  control_limits=None, cost_weights=None, use_gpu=MPPI_USE_GPU):
         """

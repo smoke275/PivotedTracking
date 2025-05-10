@@ -2,7 +2,7 @@
 Escort Agent (FollowerAgent) implementation
 
 This file contains the FollowerAgent class which represents the "escort" agent
-in the simulation. It uses MPPI control to follow the main visitor agent.
+in the simulation. It can use various controller types to follow the main visitor agent.
 """
 import os
 import sys
@@ -14,18 +14,26 @@ import numpy as np
 import pygame
 from math import sin, cos, pi
 from collections import deque
+from multitrack.controllers.base_controller import BaseController
 from multitrack.controllers.mppi_controller import MPPIController
+from multitrack.controllers.pid_controller import PIDController
 from multitrack.utils.vision import (
     is_agent_in_vision_cone, get_vision_cone_points_multithreaded as get_vision_cone_points
 )
 from multitrack.utils.config import *
 from multitrack.filters.kalman_filter import UnicycleKalmanFilter
 
+# Controller type constants
+CONTROLLER_MPPI = "mppi"
+CONTROLLER_PID = "pid"
+AVAILABLE_CONTROLLERS = [CONTROLLER_MPPI, CONTROLLER_PID]
+
 class FollowerAgent:
     def __init__(self, initial_state=None, target_distance=FOLLOWER_TARGET_DISTANCE, 
-                 search_duration=FOLLOWER_SEARCH_DURATION, walls=None, doors=None):
+                 search_duration=FOLLOWER_SEARCH_DURATION, walls=None, doors=None,
+                 controller_type=CONTROLLER_MPPI):
         """
-        Follower agent that uses an MPPI controller to follow a target
+        Follower agent that uses a controller to follow a target
         
         Parameters:
         - initial_state: [x, y, theta, v] or None for random initialization
@@ -33,6 +41,7 @@ class FollowerAgent:
         - search_duration: Frames to continue searching after losing sight of target
         - walls: List of wall rectangles for valid position checking
         - doors: List of door rectangles for valid position checking
+        - controller_type: Type of controller to use (mppi or pid)
         """
         # Initialize state
         if initial_state is None:
@@ -52,10 +61,11 @@ class FollowerAgent:
         # Control inputs
         self.controls = np.array([0.0, 0.0])
         
-        # Initialize MPPI controller
-        self.mppi = MPPIController(horizon=MPPI_HORIZON, samples=MPPI_SAMPLES, dt=0.1)
+        # Initialize controller based on the specified type
+        self.controller_type = controller_type if controller_type in AVAILABLE_CONTROLLERS else CONTROLLER_MPPI
+        self._initialize_controller()
         
-        # Last predicted trajectory from MPPI
+        # Last predicted trajectory from controller
         self.predicted_trajectory = None
         
         # Target distance to maintain from the leader
@@ -132,6 +142,45 @@ class FollowerAgent:
         self.backup_duration = 30  # How long to back up when stuck (in frames)
         self.min_movement_threshold = 5.0  # Minimum movement required to not be considered stuck
         self.stuck_check_interval = 10  # How often to check if stuck (in frames)
+    
+    def _initialize_controller(self):
+        """Initialize the controller based on the current controller type"""
+        if self.controller_type == CONTROLLER_MPPI:
+            self.controller = MPPIController(horizon=MPPI_HORIZON, samples=MPPI_SAMPLES, dt=0.1)
+        elif self.controller_type == CONTROLLER_PID:
+            self.controller = PIDController(horizon=MPPI_HORIZON, dt=0.1)
+        else:
+            # Default to MPPI if an invalid type is specified
+            self.controller = MPPIController(horizon=MPPI_HORIZON, samples=MPPI_SAMPLES, dt=0.1)
+            self.controller_type = CONTROLLER_MPPI
+    
+    def set_controller_type(self, controller_type):
+        """
+        Change the controller type
+        
+        Parameters:
+        - controller_type: Type of controller to use (mppi or pid)
+        
+        Returns:
+        - True if controller was changed, False if invalid type
+        """
+        if controller_type not in AVAILABLE_CONTROLLERS:
+            return False
+        
+        if controller_type != self.controller_type:
+            self.controller_type = controller_type
+            self._initialize_controller()
+            print(f"Changed to {controller_type.upper()} controller")
+        
+        return True
+    
+    def get_controller_info(self):
+        """Get information about the current controller"""
+        return {
+            "type": self.controller_type,
+            "name": "MPPI Controller" if self.controller_type == CONTROLLER_MPPI else "PID Controller",
+            "stats": self.controller.get_computation_stats()
+        }
     
     def _find_valid_position(self, walls, doors=None):
         """Find a valid position that doesn't collide with walls"""
@@ -331,8 +380,8 @@ class FollowerAgent:
                     # Generate target trajectory (follow leader at a distance)
                     target_trajectory = self._generate_target_trajectory(leader_state)
                     
-                    # Compute optimal control using MPPI
-                    optimal_control, predicted_trajectory = self.mppi.compute_control(
+                    # Compute optimal control using controller
+                    optimal_control, predicted_trajectory = self.controller.compute_control(
                         self.state, target_trajectory, obstacles)
                     
                     # Store predicted trajectory for visualization
@@ -356,10 +405,10 @@ class FollowerAgent:
                             # Create a target state with the agent's position and the target orientation
                             # This will make the agent navigate to the last seen position
                             target_state = np.array([target_x, target_y, target_theta, 0.0])
-                            target_trajectory = np.tile(target_state, (self.mppi.horizon + 1, 1))
+                            target_trajectory = np.tile(target_state, (self.controller.horizon + 1, 1))
                             
                             # Compute control to move to last seen position
-                            optimal_control, predicted_trajectory = self.mppi.compute_control(
+                            optimal_control, predicted_trajectory = self.controller.compute_control(
                                 self.state, target_trajectory, obstacles)
                             
                             # Store predicted trajectory for visualization
@@ -513,7 +562,7 @@ class FollowerAgent:
         
         # For simplicity, repeat the target state for the entire horizon
         target_state = np.array([tx, ty, ttheta, tv])
-        target_trajectory = np.tile(target_state, (self.mppi.horizon + 1, 1))
+        target_trajectory = np.tile(target_state, (self.controller.horizon + 1, 1))
         
         return target_trajectory
     
@@ -569,7 +618,7 @@ class FollowerAgent:
             if len(ellipse_points_int) > 2:
                 pygame.draw.polygon(screen, UNCERTAINTY_COLOR, ellipse_points_int, 1)
         
-        # Draw MPPI predicted trajectory
+        # Draw controller predicted trajectory
         if SHOW_MPPI_PREDICTIONS and self.predicted_trajectory is not None:
             for i in range(1, len(self.predicted_trajectory)):
                 pred_prev = self.predicted_trajectory[i-1]

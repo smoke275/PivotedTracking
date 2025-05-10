@@ -206,6 +206,15 @@ def run_simulation(multicore=None, num_cores=None):
                         follower = FollowerAgent(target_distance=100.0)
                     if not FOLLOWER_ENABLED:
                         follower = None
+                # Toggle controller type
+                elif event.key == pygame.K_p:
+                    # Toggle controller type (only if follower is enabled)
+                    if follower is not None:
+                        # Switch between MPPI and PID controllers
+                        new_controller_type = "pid" if follower.controller_type == "mppi" else "mppi"
+                        follower.set_controller_type(new_controller_type)
+                        if debug_key_messages:
+                            print(f"Switched to {new_controller_type.upper()} controller")
                 elif event.key == pygame.K_a:
                     # Toggle camera auto-tracking
                     if follower:
@@ -464,9 +473,10 @@ def run_simulation(multicore=None, num_cores=None):
                         # Only print message when first crossing the threshold
                         if follower.search_timer == follower.search_duration:
                             print("Search duration expired. Kalman filter reset and deactivated.")
-                            # Reset the MPPI controller when search duration expires
-                            follower.mppi.reset()
-                            print("MPPI controller reset due to search duration expiration.")
+                            # Reset the controller when search duration expires
+                            if hasattr(follower, 'controller'):
+                                follower.controller.reset()
+                                print(f"{follower.controller_type.upper()} controller reset due to search duration expiration.")
                         
                         # Reset and deactivate the Kalman filter when search duration expires or continues to be expired
                         follower.reset_kalman_filter()
@@ -481,9 +491,12 @@ def run_simulation(multicore=None, num_cores=None):
         
         # Update MPPI performance statistics
         mppi_stats = None
-        if follower and current_time - last_mppi_update_time >= mppi_update_interval:
-            mppi_stats = follower.mppi.get_computation_stats()
-            last_mppi_update_time = current_time
+        if follower and hasattr(follower, 'controller'):
+            if current_time - last_mppi_update_time >= mppi_update_interval:
+                # Check controller type and access stats accordingly
+                if follower.controller_type == "mppi":
+                    mppi_stats = follower.controller.get_computation_stats()
+                last_mppi_update_time = current_time
         
         # Draw environment first (instead of just filling with black)
         environment.draw(screen, font)
@@ -604,8 +617,10 @@ def run_simulation(multicore=None, num_cores=None):
             # Display MPPI performance statistics if available
             if mppi_stats:
                 info_text.append(f"MPPI compute: {mppi_stats['last_time']:.1f}ms (avg: {mppi_stats['avg_time']:.1f}ms)")
-                cache_hits = sum(1 for entry in follower.mppi.computation_cache if entry is not None)
-                info_text.append(f"Cache: {cache_hits}/{MPPI_CACHE_SIZE} | Batch size: {follower.mppi.batch_size}")
+                # Safely check for MPPI controller and computation cache
+                if follower.controller_type == "mppi" and hasattr(follower.controller, 'computation_cache'):
+                    cache_hits = sum(1 for entry in follower.controller.computation_cache if entry is not None)
+                    info_text.append(f"Cache: {cache_hits}/{MPPI_CACHE_SIZE} | Batch size: {follower.controller.batch_size}")
                 
         # Add entropy information if Kalman filter is active
         if follower and follower.kalman_filter_active:

@@ -1,6 +1,6 @@
 # PivotedTracking
 
-A simulation environment for visitor tracking with escort agents using Kalman filters and MPPI control.
+A simulation environment for visitor tracking with escort agents using Kalman filters and multiple controller types.
 
 ## Project Overview
 
@@ -8,15 +8,16 @@ This project implements a dynamic simulation of a visitor-escort scenario where:
 
 - A **Visitor** (red agent) can be moved manually using arrow keys
 - An **Escort** (orange agent) can either:
-  - Automatically track and follow the visitor using Model Predictive Path Integral (MPPI) control
+  - Automatically track and follow the visitor using configurable controllers (MPPI or PID)
   - Be controlled manually using WASD keys
 
 The simulation includes:
 - Real-time Kalman filter-based state estimation
 - Uncertainty visualization with covariance ellipses
-- Vision cones for the escort agent (green when visitor is visible, yellow when not visible)
+- Dual camera system with primary and secondary vision cones
 - Wall and obstacle collision detection
 - Dynamic entropy measurement of the visitor's estimated state
+- Map graph generation for navigation planning
 
 ## Images and Documentation
 
@@ -73,8 +74,13 @@ python main.py
 - **WASD** (when in manual mode):
   - W/S: Move forward/backward
   - A/D: Turn left/right
+- **P**: Toggle between MPPI and PID controllers
 - **+/-**: Adjust following distance
 - **R**: Reset escort position
+
+### Camera Control
+- **Q/E**: Rotate secondary camera (when manual camera control is active)
+- **A**: Toggle camera auto-tracking mode
 
 ### Display Options
 - **F**: Toggle FPS display
@@ -93,17 +99,21 @@ python main.py
 
 - `multitrack/models/`: Core agent models
   - `agents/visitor_agent.py`: Visitor agent with Kalman filter tracking
-  - `agents/escort_agent.py`: Escort agent with MPPI controller
+  - `agents/escort_agent.py`: Escort agent with switchable controllers
 - `multitrack/controllers/`: Control algorithms
+  - `base_controller.py`: Abstract controller interface
   - `mppi_controller.py`: Model Predictive Path Integral controller
+  - `pid_controller.py`: PID controller implementation
 - `multitrack/filters/`: State estimation
   - `kalman_filter.py`: Kalman filter implementation
 - `multitrack/utils/`: Utility functions
   - `vision.py`: Vision and detection utilities
   - `geometry.py`: Geometric calculations
   - `config.py`: Configuration parameters
+  - `map_graph.py`: Graph-based navigation map
 - `multitrack/visualizations/`: Rendering utilities
   - `enhanced_rendering.py`: Advanced visual effects
+  - `information_overlay.py`: Threaded information display
 - `multitrack/simulation/`: Simulation environment
   - `unicycle_reachability_simulation.py`: Main simulation loop
 
@@ -118,11 +128,17 @@ python main.py
 - Smart initialization to avoid starting in walls
 
 ### Escort Agent
-- MPPI-based optimal control for tracking
-- Vision cone with line-of-sight detection
+- Multiple controller options:
+  - MPPI-based optimal control for predictive tracking
+  - PID controller for simpler, reactive tracking
+- Dual vision system:
+  - Primary fixed forward-facing camera
+  - Secondary rotatable camera (manual or auto-tracking)
+- Vision cones with line-of-sight detection
 - Manual control mode
 - Minimum safety distance enforcement
 - Search behavior when visitor is not visible
+- Stuck detection and recovery mechanisms
 - Intelligent positioning to avoid starting in walls
 
 ## Visualization
@@ -143,6 +159,20 @@ The simulation provides rich visual feedback:
 4. Entropy calculation provides a single metric for tracking uncertainty.
 
 ## Recent Updates
+
+### May 19, 2025: Controller Architecture Improvements
+- Added abstract base controller interface for better extensibility
+- Implemented PID controller as an alternative to MPPI
+- Fixed controller switching to improve robustness
+- Enhanced controller architecture to support seamless switching between controller types
+- Improved simulation stability with proper controller error handling
+
+### May 15, 2025: Enhanced Vision System
+- Implemented dual camera system (primary fixed and secondary rotatable)
+- Added manual camera control with Q/E keys for precise aiming
+- Developed camera auto-tracking with PID-based target following
+- Improved search patterns when visitor is lost from view
+- Enhanced vision cone visualization with camera-specific colors
 
 ### May 10, 2025: Threaded Information Overlay System
 - Moved information overlay rendering to a separate thread
