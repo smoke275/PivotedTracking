@@ -489,13 +489,12 @@ def run_simulation(multicore=None, num_cores=None):
         # Get current time to update MPPI stats at regular intervals
         current_time = elapsed_time
         
-        # Update MPPI performance statistics
-        mppi_stats = None
+        # Update controller performance statistics
+        controller_stats = None
         if follower and hasattr(follower, 'controller'):
             if current_time - last_mppi_update_time >= mppi_update_interval:
-                # Check controller type and access stats accordingly
-                if follower.controller_type == "mppi":
-                    mppi_stats = follower.controller.get_computation_stats()
+                # Get stats from the current controller, regardless of type
+                controller_stats = follower.controller.get_computation_stats()
                 last_mppi_update_time = current_time
         
         # Draw environment first (instead of just filling with black)
@@ -615,8 +614,8 @@ def run_simulation(multicore=None, num_cores=None):
                 info_text.append(f"Shift+/- or Shift++: Change measurement rate ({follower.measurement_interval:.1f}s)")
             
             # Display MPPI performance statistics if available
-            if mppi_stats:
-                info_text.append(f"MPPI compute: {mppi_stats['last_time']:.1f}ms (avg: {mppi_stats['avg_time']:.1f}ms)")
+            if controller_stats:
+                info_text.append(f"Controller compute: {controller_stats['last_time']:.1f}ms (avg: {controller_stats['avg_time']:.1f}ms)")
                 # Safely check for MPPI controller and computation cache
                 if follower.controller_type == "mppi" and hasattr(follower.controller, 'computation_cache'):
                     cache_hits = sum(1 for entry in follower.controller.computation_cache if entry is not None)
@@ -633,7 +632,7 @@ def run_simulation(multicore=None, num_cores=None):
         overlay.update_data(
             info_text=info_text,
             title_text="Visitor with Escort Simulation",
-            mppi_stats=mppi_stats,
+            mppi_stats=controller_stats,  # Pass controller_stats instead of undefined mppi_stats
             key_debug=key_debug,
             keys=keys,
             show_fps=show_fps,
