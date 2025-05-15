@@ -129,6 +129,9 @@ MAP_GRAPH_NODE_COLOR = (100, 100, 255)  # Color for graph nodes
 MAP_GRAPH_EDGE_COLOR = (50, 50, 200)    # Color for graph edges
 MAP_GRAPH_CACHE_ENABLED = True  # Whether to cache map graphs between runs
 MAP_GRAPH_CACHE_FILE = "map_graph_cache.pkl"  # File to store cached map graph
+MAP_GRAPH_INSPECTION_CACHE_FILE = "inspection_map_graph_cache.pkl"  # File for inspection simulation
+MAP_GRAPH_VISIBILITY_CACHE_FILE = "graph_visibility_cache.pkl"  # File to store node visibility data
+MAP_GRAPH_VISIBILITY_RANGE = 1600  # Maximum visibility range in pixels
 MAP_GRAPH_MULTICORE_DEFAULT = True  # Use multicore processing by default
 
 # Particle effects

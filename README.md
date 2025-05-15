@@ -174,6 +174,13 @@ The simulation provides rich visual feedback:
 - Improved search patterns when visitor is lost from view
 - Enhanced vision cone visualization with camera-specific colors
 
+### May 15, 2025: Environment Inspection UI Improvements
+- Simplified visibility cache information display in UI
+- Added support for custom visibility cache file locations
+- Improved cache handling by showing only relevant information (custom vs. default)
+- Enhanced visibility analysis on multi-core systems
+- Fixed issue with visibility through doors in map analysis
+
 ### May 10, 2025: Threaded Information Overlay System
 - Moved information overlay rendering to a separate thread
 - Improved performance by decoupling visualization from simulation logic
@@ -193,3 +200,21 @@ The simulation provides rich visual feedback:
 - **--num-cores/-n**: Specify exact number of cores to use
 - **--limit-cores**: Set maximum number of cores to use (default: 16)
 - **--skip-cache**: Force regeneration of the map graph
+
+### Environment Inspection Tool
+
+The project includes a dedicated environment inspection tool that allows you to visualize and analyze the simulation environment:
+
+```bash
+python inspect_environment.py
+```
+
+#### Inspection Tool Options
+- **--visibility-cache/-c**: Specify custom file path for visibility cache
+- **--visibility-range/-r**: Set maximum visibility range in pixels (default: 1600)
+- **--analyze-on-start/-a**: Automatically analyze visibility on startup
+- **--load-visibility/-l**: Load visibility data from cache on startup
+- **--no-cache**: Disable all caching for fresh generation
+- **--multicore/-m**: Use multicore processing (default: enabled)
+- **--single-core/-s**: Use single-core processing only
+- **--num-cores/-n**: Specify number of CPU cores to use
