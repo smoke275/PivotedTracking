@@ -18,6 +18,8 @@ The simulation includes:
 - Wall and obstacle collision detection
 - Dynamic entropy measurement of the visitor's estimated state
 - Map graph generation for navigation planning
+- Path planning with graph-based and dynamically feasible paths
+- Environment inspection tools for map analysis
 
 ## Images and Documentation
 
@@ -95,6 +97,50 @@ python main.py
 ### General
 - **ESC**: Quit the simulation
 
+## Additional Tools
+
+### Environment Inspection
+
+The project includes an environment inspection tool that allows you to:
+- Visualize and analyze the map graph
+- Test visibility between nodes
+- Generate and display paths between nodes
+
+To run the environment inspection tool:
+
+```bash
+python inspect_environment.py
+```
+
+#### Environment Inspection Controls
+
+- **Map Graph:**
+  - **G**: Toggle map graph display
+  - **R**: Regenerate map graph
+- **Visibility Analysis:**
+  - **V**: Analyze node visibility and save to cache
+  - **L**: Load visibility data from cache
+- **Node Navigation:**
+  - **Mouse**: Left-click on nodes to select them
+  - Right-click to find path from agent to node
+  - **N**: Go to next node
+  - **P**: Go to previous node
+- **Path Visualization:**
+  - **T**: Toggle path visibility
+  - **C**: Clear current path
+  - Yellow path: Graph-based shortest path
+  - Cyan dashed path: Dynamically feasible path respecting agent motion constraints
+
+### Reachability Visualization
+
+For advanced analysis, the project also includes a reachability visualization tool:
+
+```bash
+python reachability_visualization.py
+```
+
+This tool visualizes the reachable set for an agent at its current location with probabilities for each map node.
+
 ## Project Structure
 
 - `multitrack/models/`: Core agent models
@@ -159,6 +205,15 @@ The simulation provides rich visual feedback:
 4. Entropy calculation provides a single metric for tracking uncertainty.
 
 ## Recent Updates
+
+### May 15, 2025: Path Planning and Navigation Enhancements
+- Added path planning functionality to the environment inspection tool
+- Implemented graph-based shortest path algorithm with A* pathfinding
+- Added dynamically feasible path generation that respects agent motion constraints
+- Enhanced inspection UI with path visualization controls
+- Added path comparison metrics (length, nodes, feasibility)
+- Implemented mouse navigation with left-click for node selection and right-click for path finding
+- Created new pathfinding utility module for reuse across different simulation modes
 
 ### May 19, 2025: Controller Architecture Improvements
 - Added abstract base controller interface for better extensibility

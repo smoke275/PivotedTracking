@@ -15,6 +15,7 @@ import pickle
 from multitrack.utils.config import *
 from multitrack.models.simulation_environment import SimulationEnvironment
 from multitrack.utils.map_graph import MapGraph
+from multitrack.utils.pathfinding import find_shortest_path, calculate_path_length, smooth_path, create_dynamically_feasible_path
 
 def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=False, load_visibility=False, visibility_cache_file=None):
     pygame.init()
@@ -70,6 +71,80 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
 
     # Clock for controlling the frame rate
     clock = pygame.time.Clock()
+    
+    # Function to draw path between nodes
+    def draw_path(path, color=(255, 215, 0), width=4, start_color=None, end_color=None, dashed=False):
+        """
+        Draw a path on the screen
+        
+        Args:
+            path: List of points [(x, y)] forming the path
+            color: RGB color tuple for the path
+            width: Width of the path line
+            start_color: Color for start point (defaults to green if None)
+            end_color: Color for end point (defaults to red if None)
+            dashed: Whether to draw a dashed line instead of solid
+        """
+        if not path or len(path) < 2:
+            return
+        
+        # Create a surface for the path
+        path_surface = pygame.Surface((ENVIRONMENT_WIDTH, ENVIRONMENT_HEIGHT), pygame.SRCALPHA)
+        
+        # Draw lines connecting the path points
+        for i in range(len(path) - 1):
+            start = path[i]
+            end = path[i + 1]
+            
+            if dashed:
+                # Draw dashed line
+                dash_length = 5
+                space_length = 5
+                
+                # Calculate direction vector
+                dx = end[0] - start[0]
+                dy = end[1] - start[1]
+                dist = math.sqrt(dx*dx + dy*dy)
+                
+                # Normalize direction vector
+                if dist > 0:
+                    dx, dy = dx/dist, dy/dist
+                else:
+                    continue  # Skip zero-length segments
+                
+                # Draw dash segments
+                pos = start
+                step = 0
+                while step < dist:
+                    # Calculate dash start and end
+                    dash_start = (pos[0], pos[1])
+                    dash_end_dist = min(step + dash_length, dist)
+                    dash_end = (start[0] + dx * dash_end_dist, start[1] + dy * dash_end_dist)
+                    
+                    # Draw dash
+                    pygame.draw.line(path_surface, color, dash_start, dash_end, width)
+                    
+                    # Move to start of next dash
+                    step += dash_length + space_length
+                    pos = (start[0] + dx * step, start[1] + dy * step)
+            else:
+                # Draw solid line
+                pygame.draw.line(path_surface, color, start, end, width)
+        
+        # Draw circles at each node in the path
+        for point in path:
+            pygame.draw.circle(path_surface, color, point, width + 1)
+        
+        # Use provided colors or defaults for start and end
+        start_color = start_color or (0, 255, 0)  # Default: green start
+        end_color = end_color or (255, 0, 0)      # Default: red end
+        
+        # Highlight start and end points
+        pygame.draw.circle(path_surface, start_color, path[0], width + 2)  # Start point
+        pygame.draw.circle(path_surface, end_color, path[-1], width + 2)  # End point
+        
+        # Blit the path surface to the screen
+        screen.blit(path_surface, (0, 0))
     
     # Loading status display function
     def update_loading_status(message, progress):
@@ -179,6 +254,14 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
     # Initialize visibility map as empty dict
     visibility_map = {}
     selected_node_index = None
+    
+    # Initialize path visualization variables
+    show_path = False
+    current_path = None
+    dynamic_path = None  # Added for dynamic path
+    path_end_index = None
+    path_length = 0.0
+    dynamic_path_length = 0.0  # Added for dynamic path
     
     # Try to load from cache if enabled
     if MAP_GRAPH_CACHE_ENABLED:
@@ -394,6 +477,25 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                                 print(f"Selected node {selected_node_index} with {visible_count} visible nodes")
                             else:
                                 print(f"Selected node {selected_node_index} (no visibility data)")
+                    elif event.key == pygame.K_t:
+                        # Toggle path display
+                        if current_path:
+                            show_path = not show_path
+                            print(f"Path display: {'On' if show_path else 'Off'}")
+                        else:
+                            print("No path to toggle. Right-click on a node to set a destination.")
+                    elif event.key == pygame.K_c:
+                        # Clear the current path
+                        if current_path:
+                            current_path = None
+                            dynamic_path = None
+                            path_end_index = None
+                            path_length = 0.0
+                            dynamic_path_length = 0.0
+                            show_path = False
+                            print("Path cleared")
+                        else:
+                            print("No path to clear")
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     if event.button == 1 and show_map_graph:  # Left mouse button
                         # Get mouse position
@@ -467,6 +569,69 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                                 print("Press V to analyze visibility or L to load cached data.")
                         else:
                             print("No node found near the click position")
+                    elif event.button == 3 and show_map_graph:  # Right mouse button
+                        # Get mouse position
+                        mouse_x, mouse_y = pygame.mouse.get_pos()
+                        
+                        # Find the closest node to the mouse click
+                        target_node_index = None
+                        closest_distance = float('inf')
+                        click_search_radius = 20  # pixels
+                        
+                        for i, node in enumerate(map_graph.nodes):
+                            node_x, node_y = node
+                            if abs(node_x - mouse_x) > click_search_radius or abs(node_y - mouse_y) > click_search_radius:
+                                continue
+                                
+                            distance = ((node_x - mouse_x) ** 2 + (node_y - mouse_y) ** 2) ** 0.5
+                            
+                            if distance < click_search_radius and distance < closest_distance:
+                                closest_distance = distance
+                                target_node_index = i
+                        
+                        # If a target node was clicked, find path from agent to target
+                        if target_node_index is not None:
+                            # Get agent's current position
+                            agent_pos = (agent.state[0], agent.state[1])
+                            
+                            # Set the path end point
+                            path_end_index = target_node_index
+                            
+                            # Find shortest path between agent and target node
+                            current_path = find_shortest_path(
+                                map_graph, 
+                                agent_pos, 
+                                map_graph.nodes[path_end_index]
+                            )
+                            
+                            if current_path:
+                                # Smooth the path to remove unnecessary points
+                                current_path = smooth_path(current_path, max_points=15)
+                                
+                                # Calculate path length
+                                path_length = calculate_path_length(current_path)
+                                
+                                # Create dynamically feasible path that respects agent's motion constraints
+                                dynamic_path = create_dynamically_feasible_path(
+                                    current_path,
+                                    agent.state,  # Pass the current agent state
+                                    max_speed=AGENT_LINEAR_VEL,
+                                    max_angular_vel=AGENT_ANGULAR_VEL,
+                                    dt=0.1,
+                                    sim_steps=1000  # Increase steps for longer paths
+                                )
+                                
+                                # Calculate dynamic path length
+                                dynamic_path_length = calculate_path_length(dynamic_path)
+                                
+                                show_path = True
+                                print(f"Path found from agent to node {path_end_index}")
+                                print(f"Original path: {len(current_path)} nodes, {path_length:.1f} pixels")
+                                print(f"Dynamic path: {len(dynamic_path)} nodes, {dynamic_path_length:.1f} pixels")
+                            else:
+                                print("No path found from agent to the selected node")
+                        else:
+                            print("No node found near the right-click position")
 
             # --- AGENT CONTROL (after event handling, before drawing) ---
             keys = pygame.key.get_pressed()
@@ -548,6 +713,12 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 "L: Load visibility data",
                 "N: Next node (visibility mode)",
                 "P: Previous node (visibility mode)",
+                "Mouse: Left-click to select start point",
+                "       Right-click to find paths from agent",
+                "       - Yellow path: Graph-based shortest path",
+                "       - Cyan dashed path: Dynamically feasible path",
+                "T: Toggle path visibility",
+                "C: Clear current path",
                 "ESC: Exit"
             ]
             
@@ -783,6 +954,112 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                             default_text = regular_font.render(text, True, (200, 200, 255))
                             screen.blit(default_text, (info_x + 10, y_offset))
                             y_offset += 25
+
+            # Draw path if one exists and should be shown
+            if show_path and current_path:
+                # Draw the original path first (solid gold/yellow)
+                draw_path(current_path, color=(255, 215, 0), width=4)
+                
+                # Draw the dynamic path if it exists (dashed cyan)
+                if dynamic_path:
+                    # Use a different color and dashed line for the dynamic path
+                    draw_path(
+                        dynamic_path, 
+                        color=(0, 200, 255), 
+                        width=3, 
+                        start_color=(0, 180, 0),  # Slightly different green
+                        end_color=(220, 0, 0),    # Slightly different red
+                        dashed=True
+                    )
+                
+                # Display path information
+                path_info = [
+                    f"Path Information:",
+                    f"Graph Path Length: {path_length:.1f} pixels",
+                    f"Graph Path Nodes: {len(current_path)}",
+                ]
+                
+                # Add dynamic path info if it exists
+                if dynamic_path:
+                    path_info.extend([
+                        f"Dynamic Path Length: {dynamic_path_length:.1f} pixels",
+                        f"Dynamic Path Points: {len(dynamic_path)}",
+                        f"Length Difference: {(dynamic_path_length - path_length):.1f} pixels",
+                    ])
+                
+                path_info.extend([
+                    f"Start: Agent Position",
+                    f"End: Node {path_end_index}",
+                    "T: Toggle path visibility",
+                    "C: Clear path"
+                ])
+                
+                # Create background for path info - adjust height based on content
+                info_width = 300  # Increased width for more text
+                info_bg = pygame.Surface((info_width, len(path_info) * 25 + 10))
+                info_bg.fill((30, 30, 0))  # Dark gold background
+                info_bg.set_alpha(200)
+                
+                # Position at bottom left
+                info_x = 10
+                info_y = HEIGHT - len(path_info) * 25 - 20
+                
+                # Draw background
+                screen.blit(info_bg, (info_x, info_y))
+                
+                # Draw title bar
+                pygame.draw.rect(screen, (180, 150, 0), (info_x, info_y, info_width, 30))
+                
+                # Draw border
+                pygame.draw.rect(screen, (255, 215, 0), (info_x, info_y, info_width, len(path_info) * 25 + 10), 1)
+                
+                # Define fonts for the path info rendering
+                title_font = pygame.font.SysFont('Arial', 22, bold=True)
+                regular_font = pygame.font.SysFont('Arial', 20)
+                small_font = pygame.font.SysFont('Arial', 18)
+                
+                # Render title
+                title_text = title_font.render("Path Visualization", True, (0, 0, 0))
+                screen.blit(title_text, (info_x + (info_width - title_text.get_width()) // 2, info_y + 5))
+                
+                # Render content
+                y_offset = info_y + 35
+                for i, text in enumerate(path_info):
+                    if i == 0:  # Skip header
+                        continue
+                    elif "Graph Path" in text:
+                        # Original path info (yellow)
+                        graph_text = regular_font.render(text, True, (255, 255, 100))
+                        screen.blit(graph_text, (info_x + 10, y_offset))
+                        y_offset += 25
+                    elif "Dynamic Path" in text:
+                        # Dynamic path info (cyan)
+                        dynamic_text = regular_font.render(text, True, (100, 255, 255))
+                        screen.blit(dynamic_text, (info_x + 10, y_offset))
+                        y_offset += 25
+                    elif "Length Difference" in text:
+                        # Length difference (cyan)
+                        diff = float(text.split(":")[1].strip().split()[0])
+                        # Choose color based on length difference
+                        diff_color = (100, 255, 100) if diff <= 0 else (255, 180, 100)  # Green if shorter or equal, orange if longer
+                        diff_text = regular_font.render(text, True, diff_color)
+                        screen.blit(diff_text, (info_x + 10, y_offset))
+                        y_offset += 25
+                    elif "Start:" in text or "End:" in text:
+                        # Position info
+                        pos_text = regular_font.render(text, True, (200, 200, 255))
+                        screen.blit(pos_text, (info_x + 10, y_offset))
+                        y_offset += 25
+                    elif text.startswith("T:") or text.startswith("C:"):
+                        # Controls
+                        control_text = small_font.render(text, True, (200, 200, 200))
+                        screen.blit(control_text, (info_x + 10, y_offset))
+                        y_offset += 25
+                    else:
+                        # Default text
+                        path_text = regular_font.render(text, True, (255, 215, 0))
+                        screen.blit(path_text, (info_x + 10, y_offset))
+                        y_offset += 25
 
             # Draw the agent last, always on top
             x, y, theta, _ = agent.state
