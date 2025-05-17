@@ -16,6 +16,7 @@ from multitrack.utils.config import *
 from multitrack.models.simulation_environment import SimulationEnvironment
 from multitrack.utils.map_graph import MapGraph
 from multitrack.utils.pathfinding import find_shortest_path, calculate_path_length, smooth_path, create_dynamically_feasible_path
+from multitrack.utils.optimize_path import optimize_path_with_visibility
 
 def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=False, load_visibility=False, visibility_cache_file=None):
     pygame.init()
@@ -605,11 +606,24 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                             )
                             
                             if current_path:
+                                # Store the original path for comparison
+                                original_path = current_path.copy()
+                                original_path_length = calculate_path_length(original_path)
+                                
+                                # Optimize path using visibility data if available
+                                if visibility_map:
+                                    # Use visibility data to create shortcuts between nodes that can see each other
+                                    current_path = optimize_path_with_visibility(current_path, visibility_map, map_graph)
+                                    print(f"Path optimized with visibility data: {len(original_path)} → {len(current_path)} nodes")
+                                
                                 # Smooth the path to remove unnecessary points
                                 current_path = smooth_path(current_path, max_points=15)
                                 
                                 # Calculate path length
                                 path_length = calculate_path_length(current_path)
+                                
+                                # Calculate optimization gain
+                                path_optimization_gain = original_path_length - path_length
                                 
                                 # Create dynamically feasible path that respects agent's motion constraints
                                 dynamic_path = create_dynamically_feasible_path(
@@ -978,6 +992,15 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     f"Graph Path Length: {path_length:.1f} pixels",
                     f"Graph Path Nodes: {len(current_path)}",
                 ]
+                
+                # Add visibility optimization info if available
+                if 'path_optimization_gain' in locals() and path_optimization_gain > 0:
+                    optimization_percent = (path_optimization_gain / original_path_length) * 100 if original_path_length > 0 else 0
+                    path_info.extend([
+                        f"Visibility Optimization:",
+                        f"  Original Nodes: {len(original_path)}",
+                        f"  Distance Saved: {path_optimization_gain:.1f} pixels ({optimization_percent:.1f}%)",
+                    ])
                 
                 # Add dynamic path info if it exists
                 if dynamic_path:
