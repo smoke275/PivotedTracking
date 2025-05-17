@@ -33,6 +33,8 @@ def parse_arguments():
                         help="Automatically analyze visibility when starting (default: False)")
     parser.add_argument("--load-visibility", "-l", action="store_true",
                         help="Load cached visibility data on startup (default: False)")
+    parser.add_argument("--no-auto-load", action="store_true",
+                        help="Disable automatic loading of visibility data (default: False)")
     parser.add_argument("--visibility-cache", "-c", type=str, default=None,
                         help="Custom file path for visibility cache (default: uses config file path)")
     
@@ -99,20 +101,27 @@ if __name__ == "__main__":
     print("    ESC: Quit the application")
     
     # Advanced options information
-    if args.analyze_on_start or args.load_visibility or args.no_cache:
+    if args.analyze_on_start or args.load_visibility or args.no_cache or args.no_auto_load:
         print("\nActive Advanced Options:")
         if args.analyze_on_start:
             print("  • Auto-analyze visibility on startup")
         if args.load_visibility:
             print("  • Auto-load visibility data from cache")
+        if not args.no_auto_load:
+            print("  • Automatically loading visibility cache if available")
+        if args.no_auto_load:
+            print("  • Automatic visibility cache loading disabled")
         if args.no_cache:
             print("  • Cache disabled for this session")
+    
+    # Auto-load visibility data by default unless explicitly disabled
+    auto_load_visibility = not args.no_auto_load
     
     # Run the environment inspection with additional arguments
     run_environment_inspection(
         multicore=args.multicore, 
         num_cores=args.num_cores,
         auto_analyze=args.analyze_on_start,
-        load_visibility=args.load_visibility,
+        load_visibility=args.load_visibility or auto_load_visibility,  # Always load visibility data unless explicitly disabled
         visibility_cache_file=visibility_cache_path
     )
