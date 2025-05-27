@@ -15,7 +15,7 @@ import pickle
 from multitrack.utils.config import *
 from multitrack.models.simulation_environment import SimulationEnvironment
 from multitrack.utils.map_graph import MapGraph
-from multitrack.utils.pathfinding import find_shortest_path, calculate_path_length, smooth_path, create_dynamically_feasible_path
+from multitrack.utils.pathfinding import find_shortest_path, calculate_path_length, smooth_path, create_dynamically_feasible_path, find_closest_node
 from multitrack.utils.optimize_path import optimize_path_with_visibility
 
 def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=False, load_visibility=False, visibility_cache_file=None):
@@ -255,6 +255,12 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
     # Initialize visibility map as empty dict
     visibility_map = {}
     selected_node_index = None
+    
+    # Agent-following functionality
+    follow_agent_mode = False  # Toggle for agent-following mode
+    agent_last_position = None  # Track agent's last position
+    agent_movement_threshold = 20.0  # Minimum distance to consider agent has moved
+    agent_following_node_index = None  # Current node closest to agent when following
     
     # Initialize path visualization variables
     show_path = False
@@ -497,6 +503,21 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                             print("Path cleared")
                         else:
                             print("No path to clear")
+                    elif event.key == pygame.K_f:
+                        # Toggle agent-following mode
+                        follow_agent_mode = not follow_agent_mode
+                        if follow_agent_mode:
+                            print("Agent-following mode: ON - Visibility will track agent movement")
+                            # Initialize agent position tracking
+                            agent_last_position = (agent.state[0], agent.state[1])
+                            # Find closest node to current agent position
+                            agent_pos = (agent.state[0], agent.state[1])
+                            agent_following_node_index = find_closest_node(map_graph.nodes, agent_pos)
+                            if agent_following_node_index is not None and visibility_map:
+                                selected_node_index = agent_following_node_index
+                                print(f"Following agent at node {selected_node_index}")
+                        else:
+                            print("Agent-following mode: OFF - Manual node selection enabled")
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     if event.button == 1 and show_map_graph:  # Left mouse button
                         # Get mouse position
@@ -662,6 +683,38 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
             agent.set_controls(linear_vel, angular_vel)
             agent.update(dt=0.1, walls=environment.get_all_walls(), doors=environment.get_doors())
 
+            # Agent-following functionality
+            if follow_agent_mode and visibility_map:
+                current_agent_position = (agent.state[0], agent.state[1])
+                
+                # Check if agent has moved significantly
+                agent_moved = False
+                if agent_last_position is None:
+                    agent_moved = True
+                else:
+                    distance_moved = ((current_agent_position[0] - agent_last_position[0]) ** 2 + 
+                                    (current_agent_position[1] - agent_last_position[1]) ** 2) ** 0.5
+                    if distance_moved >= agent_movement_threshold:
+                        agent_moved = True
+                
+                # Update visibility display if agent moved significantly
+                if agent_moved:
+                    # Find the closest node to the agent's current position
+                    new_closest_node = find_closest_node(map_graph.nodes, current_agent_position)
+                    
+                    # Only update if we found a node and it's different from current
+                    if (new_closest_node is not None and 
+                        new_closest_node != agent_following_node_index and
+                        new_closest_node in visibility_map):
+                        
+                        agent_following_node_index = new_closest_node
+                        selected_node_index = agent_following_node_index
+                        agent_last_position = current_agent_position
+                        
+                        # Optional: Print debug info (can be removed later)
+                        visible_count = len(visibility_map[selected_node_index])
+                        print(f"Agent moved - now following node {selected_node_index} with {visible_count} visible nodes")
+
             # Debug: print agent state
             # print(f"Agent state: {agent.state}")
 
@@ -727,6 +780,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 "L: Load visibility data",
                 "N: Next node (visibility mode)",
                 "P: Previous node (visibility mode)",
+                "F: Toggle agent-following mode",
                 "Mouse: Left-click to select start point",
                 "       Right-click to find paths from agent",
                 "       - Yellow path: Graph-based shortest path",
