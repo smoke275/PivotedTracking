@@ -270,6 +270,9 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
     path_length = 0.0
     dynamic_path_length = 0.0  # Added for dynamic path
     
+    # Initialize simple probability overlay variable
+    show_probability_overlay = False
+    
     # Try to load from cache if enabled
     if MAP_GRAPH_CACHE_ENABLED:
         print("Attempting to load inspection map graph from cache...")
@@ -518,6 +521,13 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                                 print(f"Following agent at node {selected_node_index}")
                         else:
                             print("Agent-following mode: OFF - Manual node selection enabled")
+                    elif event.key == pygame.K_o:
+                        # Toggle probability overlay
+                        show_probability_overlay = not show_probability_overlay
+                        if show_probability_overlay:
+                            print("Probability overlay: ON - Showing distance-based probability")
+                        else:
+                            print("Probability overlay: OFF")
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     if event.button == 1 and show_map_graph:  # Left mouse button
                         # Get mouse position
@@ -731,6 +741,27 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     end = map_graph.nodes[j]
                     pygame.draw.line(screen, MAP_GRAPH_EDGE_COLOR, start, end, 1)
                 
+                # Calculate node probabilities if probability overlay is enabled
+                node_probabilities = {}
+                if show_probability_overlay and visibility_map and selected_node_index in visibility_map:
+                    agent_x, agent_y = agent.state[0], agent.state[1]
+                    max_distance = 200  # Maximum distance for probability calculation
+                    
+                    # Get the list of nodes visible from the selected node
+                    visible_node_indices = set(visibility_map[selected_node_index])
+                    
+                    for i, node in enumerate(map_graph.nodes):
+                        # Only calculate probability for nodes that are visible from the selected node
+                        if i in visible_node_indices:
+                            node_x, node_y = node
+                            distance = math.sqrt((node_x - agent_x)**2 + (node_y - agent_y)**2)
+                            
+                            if distance <= max_distance:
+                                # Calculate probability (1.0 at agent position, 0.0 at max_distance)
+                                probability = max(0, 1.0 - (distance / max_distance))
+                                if probability > 0.05:  # Only store significant probabilities
+                                    node_probabilities[i] = probability
+                
                 # Draw the nodes last to make them more visible
                 for i, node in enumerate(map_graph.nodes):
                     # Determine if this is the node under the mouse for hover effect
@@ -739,6 +770,21 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     
                     if distance < 15:  # Mouse hover highlight
                         pygame.draw.circle(screen, (255, 165, 0), node, 6)  # Orange highlight for hover
+                    elif show_probability_overlay and i in node_probabilities:
+                        # Color node based on probability
+                        probability = node_probabilities[i]
+                        
+                        # Create probability-based color (red intensity based on probability)
+                        red_intensity = int(probability * 255)
+                        prob_color = (red_intensity, max(0, 100 - red_intensity), max(0, 100 - red_intensity))
+                        
+                        # Draw larger node with probability color
+                        node_size = int(4 + probability * 4)  # Size 4-8 based on probability
+                        pygame.draw.circle(screen, prob_color, node, node_size)
+                        
+                        # Add subtle glow effect for high probability nodes
+                        if probability > 0.7:
+                            pygame.draw.circle(screen, (red_intensity, 50, 50, 100), node, node_size + 2)
                     else:
                         # Regular node
                         pygame.draw.circle(screen, MAP_GRAPH_NODE_COLOR, node, 4)
@@ -781,6 +827,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 "N: Next node (visibility mode)",
                 "P: Previous node (visibility mode)",
                 "F: Toggle agent-following mode",
+                f"O: Toggle probability overlay {'(ON)' if show_probability_overlay else '(OFF)'} - requires visibility data",
                 "Mouse: Left-click to select start point",
                 "       Right-click to find paths from agent",
                 "       - Yellow path: Graph-based shortest path",
@@ -886,6 +933,36 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         for visible_node in node_distance_groups['far']:
                             pygame.draw.line(screen, (100, 180, 30, 150), selected_node, visible_node, 1)
                             pygame.draw.circle(screen, (100, 180, 30), visible_node, 3)
+                    
+                    # SECOND PASS: Redraw probability overlay nodes on top of visibility visualization
+                    if show_probability_overlay and visibility_map and selected_node_index in visibility_map:
+                        agent_x, agent_y = agent.state[0], agent.state[1]
+                        max_distance = 200  # Maximum distance for probability calculation
+                        
+                        # Get the list of nodes visible from the selected node
+                        visible_node_indices = set(visibility_map[selected_node_index])
+                        
+                        for i, node in enumerate(map_graph.nodes):
+                            # Only render probability for nodes that are visible from the selected node
+                            if i in visible_node_indices:
+                                node_x, node_y = node
+                                distance = math.sqrt((node_x - agent_x)**2 + (node_y - agent_y)**2)
+                                
+                                if distance <= max_distance:
+                                    # Calculate probability (1.0 at agent position, 0.0 at max_distance)
+                                    probability = max(0, 1.0 - (distance / max_distance))
+                                    if probability > 0.05:  # Only render significant probabilities
+                                        # Create probability-based color (red intensity based on probability)
+                                        red_intensity = int(probability * 255)
+                                        prob_color = (red_intensity, max(0, 100 - red_intensity), max(0, 100 - red_intensity))
+                                        
+                                        # Draw larger node with probability color
+                                        node_size = int(4 + probability * 4)  # Size 4-8 based on probability
+                                        pygame.draw.circle(screen, prob_color, node, node_size)
+                                        
+                                        # Add subtle glow effect for high probability nodes
+                                        if probability > 0.7:
+                                            pygame.draw.circle(screen, (red_intensity, 50, 50, 100), node, node_size + 2)
                     
                     # Always draw the selected node with a different color and larger size (on top of everything)
                     # Add pulsing effect to selected node

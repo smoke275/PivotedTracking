@@ -98,6 +98,8 @@ if __name__ == "__main__":
     print("    Yellow path: Graph-based shortest path")
     print("    Cyan dashed path: Dynamically feasible path respecting agent motion constraints")
     print("  Other:")
+    print("    F: Toggle agent-following mode")
+    print("    O: Toggle probability overlay (colors only visible map graph nodes based on distance)")
     print("    ESC: Quit the application")
     
     # Advanced options information
