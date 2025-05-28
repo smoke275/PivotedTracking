@@ -130,6 +130,11 @@ python inspect_environment.py
   - **C**: Clear current path
   - Yellow path: Graph-based shortest path
   - Cyan dashed path: Dynamically feasible path respecting agent motion constraints
+- **Other Features:**
+  - **F**: Toggle agent-following mode
+  - **O**: Toggle probability overlay (colors nodes based on reachability within time horizon)
+  - **B**: Toggle visibility gaps (shows ray casting discontinuities in blue lines)
+  - **+/-**: Adjust time horizon (when probability overlay is enabled)
 
 ### Reachability Visualization
 

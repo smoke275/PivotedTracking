@@ -273,6 +273,15 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
     # Initialize simple probability overlay variable
     show_probability_overlay = False
     
+    # Initialize visibility gaps display variable
+    show_visibility_gaps = False
+    
+    # Time horizon parameters for probability overlay
+    time_horizon = 4.0  # Look-ahead time in seconds
+    min_time_horizon = 0.5  # Minimum time horizon
+    max_time_horizon = 10.0  # Maximum time horizon
+    time_horizon_step = 0.5  # Step size for adjusting time horizon
+    
     # Try to load from cache if enabled
     if MAP_GRAPH_CACHE_ENABLED:
         print("Attempting to load inspection map graph from cache...")
@@ -528,6 +537,27 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                             print("Probability overlay: ON - Showing distance-based probability")
                         else:
                             print("Probability overlay: OFF")
+                    elif event.key == pygame.K_b:
+                        # Toggle visibility gaps display
+                        show_visibility_gaps = not show_visibility_gaps
+                        if show_visibility_gaps:
+                            print("Visibility gaps: ON - Showing ray casting discontinuities in blue lines")
+                        else:
+                            print("Visibility gaps: OFF")
+                    elif event.key == pygame.K_PLUS or event.key == pygame.K_EQUALS:
+                        # Increase time horizon
+                        if show_probability_overlay:
+                            time_horizon = min(max_time_horizon, time_horizon + time_horizon_step)
+                            print(f"Time horizon: {time_horizon:.1f}s (max reach: {time_horizon * LEADER_LINEAR_VEL:.0f} pixels)")
+                        else:
+                            print("Enable probability overlay (O) to adjust time horizon")
+                    elif event.key == pygame.K_MINUS:
+                        # Decrease time horizon
+                        if show_probability_overlay:
+                            time_horizon = max(min_time_horizon, time_horizon - time_horizon_step)
+                            print(f"Time horizon: {time_horizon:.1f}s (max reach: {time_horizon * LEADER_LINEAR_VEL:.0f} pixels)")
+                        else:
+                            print("Enable probability overlay (O) to adjust time horizon")
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     if event.button == 1 and show_map_graph:  # Left mouse button
                         # Get mouse position
@@ -745,24 +775,90 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 node_probabilities = {}
                 if show_probability_overlay and visibility_map and selected_node_index in visibility_map:
                     agent_x, agent_y = agent.state[0], agent.state[1]
-                    max_distance = 200  # Maximum distance for probability calculation
+                    agent_theta = agent.state[2]  # Agent's heading angle
+                    
+                    # Calculate maximum reachable distance based on time horizon and agent speed
+                    agent_speed = LEADER_LINEAR_VEL  # Use leader speed from config
+                    max_reachable_distance = time_horizon * agent_speed
+                    
+                    # Use the reachable distance directly for probability calculation
+                    max_distance = max_reachable_distance
                     
                     # Get the list of nodes visible from the selected node
                     visible_node_indices = set(visibility_map[selected_node_index])
                     
+                    # Check if time horizon is too restrictive or too permissive
+                    reachable_count = 0
+                    total_visible_count = len(visible_node_indices)
+                    
+                    # First pass: count reachable nodes
                     for i, node in enumerate(map_graph.nodes):
-                        # Only calculate probability for nodes that are visible from the selected node
                         if i in visible_node_indices:
                             node_x, node_y = node
                             distance = math.sqrt((node_x - agent_x)**2 + (node_y - agent_y)**2)
-                            
                             if distance <= max_distance:
-                                # Calculate probability (1.0 at agent position, 0.0 at max_distance)
-                                probability = max(0, 1.0 - (distance / max_distance))
-                                if probability > 0.05:  # Only store significant probabilities
-                                    node_probabilities[i] = probability
+                                reachable_count += 1
+                    
+                    # Handle edge cases
+                    edge_case_handled = False
+                    if reachable_count == 0 and total_visible_count > 0:
+                        # Time horizon too low - no nodes are reachable
+                        # Set very small probabilities for closest visible nodes
+                        closest_distances = []
+                        for i, node in enumerate(map_graph.nodes):
+                            if i in visible_node_indices:
+                                node_x, node_y = node
+                                distance = math.sqrt((node_x - agent_x)**2 + (node_y - agent_y)**2)
+                                closest_distances.append((distance, i))
+                        
+                        # Sort by distance and assign small probabilities to closest 3 nodes
+                        closest_distances.sort()
+                        for idx, (dist, node_idx) in enumerate(closest_distances[:3]):
+                            node_probabilities[node_idx] = 0.1 * (1.0 - idx * 0.3)  # 0.1, 0.07, 0.04
+                        edge_case_handled = True
+                    
+                    elif reachable_count == total_visible_count and total_visible_count > 1:
+                        # Time horizon too high - all visible nodes are reachable
+                        # Use the current max_distance but ensure probabilities are well distributed
+                        # Don't change max_distance here - let it use the time horizon-based value
+                        edge_case_handled = False  # Let normal calculation proceed with time horizon distance
+                    
+                    # Normal probability calculation (or edge case for "all reachable")
+                    if not edge_case_handled:
+                        for i, node in enumerate(map_graph.nodes):
+                            # Only calculate probability for nodes that are visible from the selected node
+                            if i in visible_node_indices:
+                                node_x, node_y = node
+                                distance = math.sqrt((node_x - agent_x)**2 + (node_y - agent_y)**2)
+                                
+                                if distance <= max_distance:
+                                    # Calculate distance-based probability (1.0 at agent position, 0.0 at max_distance)
+                                    distance_prob = max(0, 1.0 - (distance / max_distance))
+                                    
+                                    # Calculate heading angle bias
+                                    if distance > 1.0:  # Avoid division by zero for nodes very close to agent
+                                        # Calculate angle from agent to node
+                                        node_angle = math.atan2(node_y - agent_y, node_x - agent_x)
+                                        
+                                        # Calculate angular difference between agent heading and direction to node
+                                        angle_diff = abs(agent_theta - node_angle)
+                                        # Normalize to [0, π] (shortest angular distance)
+                                        if angle_diff > math.pi:
+                                            angle_diff = 2 * math.pi - angle_diff
+                                        
+                                        # Convert angle difference to heading bias factor
+                                        heading_bias = max(0, 1.0 - (angle_diff / math.pi))
+                                        
+                                        # Weight the heading bias (0.3 = 30% distance, 70% heading)
+                                        probability = distance_prob * (0.3 + 0.7 * heading_bias)
+                                    else:
+                                        # For very close nodes, use distance-only probability
+                                        probability = distance_prob
+                                    
+                                    if probability > 0.05:  # Only store significant probabilities
+                                        node_probabilities[i] = probability
                 
-                # Draw the nodes last to make them more visible
+                # Draw regular nodes first (probability overlay nodes will be drawn later after visibility)
                 for i, node in enumerate(map_graph.nodes):
                     # Determine if this is the node under the mouse for hover effect
                     mouse_x, mouse_y = pygame.mouse.get_pos()
@@ -770,23 +866,8 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     
                     if distance < 15:  # Mouse hover highlight
                         pygame.draw.circle(screen, (255, 165, 0), node, 6)  # Orange highlight for hover
-                    elif show_probability_overlay and i in node_probabilities:
-                        # Color node based on probability
-                        probability = node_probabilities[i]
-                        
-                        # Create probability-based color (red intensity based on probability)
-                        red_intensity = int(probability * 255)
-                        prob_color = (red_intensity, max(0, 100 - red_intensity), max(0, 100 - red_intensity))
-                        
-                        # Draw larger node with probability color
-                        node_size = int(4 + probability * 4)  # Size 4-8 based on probability
-                        pygame.draw.circle(screen, prob_color, node, node_size)
-                        
-                        # Add subtle glow effect for high probability nodes
-                        if probability > 0.7:
-                            pygame.draw.circle(screen, (red_intensity, 50, 50, 100), node, node_size + 2)
                     else:
-                        # Regular node
+                        # Draw regular node (probability overlay nodes will be drawn later)
                         pygame.draw.circle(screen, MAP_GRAPH_NODE_COLOR, node, 4)
                 
                 # Display map graph stats
@@ -828,6 +909,18 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 "P: Previous node (visibility mode)",
                 "F: Toggle agent-following mode",
                 f"O: Toggle probability overlay {'(ON)' if show_probability_overlay else '(OFF)'} - requires visibility data",
+                f"B: Toggle visibility gaps {'(ON)' if show_visibility_gaps else '(OFF)'} - requires visibility data",
+            ]
+            
+            # Add time horizon info when probability overlay is enabled
+            if show_probability_overlay:
+                max_reachable_distance = time_horizon * LEADER_LINEAR_VEL
+                info_text.extend([
+                    f"Time horizon: {time_horizon:.1f}s (range: {max_reachable_distance:.0f}px)",
+                    "+/-: Adjust time horizon"
+                ])
+            
+            info_text.extend([
                 "Mouse: Left-click to select start point",
                 "       Right-click to find paths from agent",
                 "       - Yellow path: Graph-based shortest path",
@@ -835,7 +928,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 "T: Toggle path visibility",
                 "C: Clear current path",
                 "ESC: Exit"
-            ]
+            ])
             
             # Add cache info
             if MAP_GRAPH_CACHE_ENABLED:
@@ -933,36 +1026,94 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         for visible_node in node_distance_groups['far']:
                             pygame.draw.line(screen, (100, 180, 30, 150), selected_node, visible_node, 1)
                             pygame.draw.circle(screen, (100, 180, 30), visible_node, 3)
-                    
-                    # SECOND PASS: Redraw probability overlay nodes on top of visibility visualization
-                    if show_probability_overlay and visibility_map and selected_node_index in visibility_map:
-                        agent_x, agent_y = agent.state[0], agent.state[1]
-                        max_distance = 200  # Maximum distance for probability calculation
-                        
-                        # Get the list of nodes visible from the selected node
-                        visible_node_indices = set(visibility_map[selected_node_index])
-                        
-                        for i, node in enumerate(map_graph.nodes):
-                            # Only render probability for nodes that are visible from the selected node
-                            if i in visible_node_indices:
-                                node_x, node_y = node
-                                distance = math.sqrt((node_x - agent_x)**2 + (node_y - agent_y)**2)
+                            
+                        # VISIBILITY GAPS VISUALIZATION: Draw ray casting discontinuities (abrupt changes in visibility)
+                        if show_visibility_gaps:
+                            # Import vision utilities
+                            from multitrack.utils.vision import cast_vision_ray
+                            
+                            # Cast rays in all directions to find visibility discontinuities
+                            num_rays = 360  # Every 1 degree for much finer resolution
+                            angle_step = (2 * math.pi) / num_rays
+                            ray_endpoints = []
+                            
+                            # Cast rays in all directions
+                            for i in range(num_rays):
+                                angle = i * angle_step
+                                endpoint = cast_vision_ray(
+                                    selected_node[0], 
+                                    selected_node[1], 
+                                    angle, 
+                                    MAP_GRAPH_VISIBILITY_RANGE,
+                                    environment.get_all_walls(),
+                                    environment.get_doors()  # Doors allow vision through
+                                )
+                                ray_endpoints.append(endpoint)
+                            
+                            # Find discontinuities in ray distances and connect successive rays with abrupt changes
+                            min_gap_distance = 30  # Minimum distance difference to consider a gap (reduced for finer detection)
+                            gap_lines = []
+                            
+                            for i in range(num_rays):
+                                current_endpoint = ray_endpoints[i]
+                                next_endpoint = ray_endpoints[(i + 1) % num_rays]  # Wrap around
                                 
-                                if distance <= max_distance:
-                                    # Calculate probability (1.0 at agent position, 0.0 at max_distance)
-                                    probability = max(0, 1.0 - (distance / max_distance))
-                                    if probability > 0.05:  # Only render significant probabilities
-                                        # Create probability-based color (red intensity based on probability)
-                                        red_intensity = int(probability * 255)
-                                        prob_color = (red_intensity, max(0, 100 - red_intensity), max(0, 100 - red_intensity))
-                                        
-                                        # Draw larger node with probability color
-                                        node_size = int(4 + probability * 4)  # Size 4-8 based on probability
-                                        pygame.draw.circle(screen, prob_color, node, node_size)
-                                        
-                                        # Add subtle glow effect for high probability nodes
-                                        if probability > 0.7:
-                                            pygame.draw.circle(screen, (red_intensity, 50, 50, 100), node, node_size + 2)
+                                # Calculate distances from selected node
+                                current_dist = math.dist(selected_node, current_endpoint)
+                                next_dist = math.dist(selected_node, next_endpoint)
+                                
+                                # Check for significant distance change (gap) between successive rays
+                                distance_diff = abs(current_dist - next_dist)
+                                if distance_diff > min_gap_distance:
+                                    # Record this gap line connecting the two successive ray endpoints
+                                    gap_lines.append((current_endpoint, next_endpoint, distance_diff))
+                            
+                            # Draw all the gap lines
+                            for start_point, end_point, gap_size in gap_lines:
+                                # Determine color intensity and line width based on gap size
+                                if gap_size > 150:
+                                    gap_color = (0, 100, 255)      # Bright blue for large gaps
+                                    line_width = 3
+                                elif gap_size > 80:
+                                    gap_color = (50, 150, 255)     # Medium blue for medium gaps
+                                    line_width = 2
+                                else:
+                                    gap_color = (100, 200, 255)    # Light blue for small gaps
+                                    line_width = 1
+                                
+                                # Draw the gap line connecting successive ray endpoints
+                                pygame.draw.line(screen, gap_color, start_point, end_point, line_width)
+                                
+                                # Draw small circles at the gap endpoints to highlight them
+                                circle_size = max(2, min(5, int(gap_size / 30)))
+                                pygame.draw.circle(screen, gap_color, start_point, circle_size)
+                                pygame.draw.circle(screen, gap_color, end_point, circle_size)
+                    
+                    # THIRD PASS: Draw ALL probability overlay nodes on top of visibility visualization
+                    if show_probability_overlay and node_probabilities:
+                        # Draw probability overlay nodes using the probabilities calculated earlier
+                        for i, node in enumerate(map_graph.nodes):
+                            if i in node_probabilities:
+                                probability = node_probabilities[i]
+                                
+                                # Create probability-based color (red intensity based on probability)
+                                red_intensity = int(probability * 255)
+                                prob_color = (red_intensity, max(0, 100 - red_intensity), max(0, 100 - red_intensity))
+                                
+                                # Draw larger node with probability color
+                                node_size = int(4 + probability * 4)  # Size 4-8 based on probability
+                                pygame.draw.circle(screen, prob_color, node, node_size)
+                                
+                                # Add subtle glow effect for high probability nodes
+                                if probability > 0.7:
+                                    pygame.draw.circle(screen, (red_intensity, 50, 50, 100), node, node_size + 2)
+                    
+                    # FOURTH PASS: Redraw any nodes with mouse hover effects on top of everything
+                    mouse_x, mouse_y = pygame.mouse.get_pos()
+                    for i, node in enumerate(map_graph.nodes):
+                        distance = ((node[0] - mouse_x) ** 2 + (node[1] - mouse_y) ** 2) ** 0.5
+                        if distance < 15:  # Mouse hover highlight
+                            pygame.draw.circle(screen, (255, 165, 0), node, 6)  # Orange highlight for hover
                     
                     # Always draw the selected node with a different color and larger size (on top of everything)
                     # Add pulsing effect to selected node
@@ -1215,12 +1366,36 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         screen.blit(path_text, (info_x + 10, y_offset))
                         y_offset += 25
 
-            # Draw the agent last, always on top
+            # Draw the agent
             x, y, theta, _ = agent.state
             pygame.draw.circle(screen, AGENT_COLOR, (int(x), int(y)), AGENT_RADIUS)
             end_x = x + AGENT_RADIUS * 1.2 * math.cos(theta)
             end_y = y + AGENT_RADIUS * 1.2 * math.sin(theta)
             pygame.draw.line(screen, (255,255,255), (x, y), (end_x, end_y), 3)
+            
+            # Draw reachability circle LAST (on top of everything) when probability overlay is enabled
+            if show_probability_overlay:
+                max_reachable_distance = time_horizon * LEADER_LINEAR_VEL
+                
+                # Create pulsing effect for the circle
+                pulse_intensity = (math.sin(pygame.time.get_ticks() / 800) + 1) / 2  # Value between 0 and 1
+                
+                # Draw the main reachability circle with higher visibility
+                circle_alpha = int(120 + 60 * pulse_intensity)  # Alpha between 120 and 180
+                circle_color = (100, 200, 255)  # Bright cyan
+                
+                # Draw multiple circle outlines for better visibility
+                for width in range(1, 4):
+                    alpha = circle_alpha - (width - 1) * 30  # Fade outer rings
+                    circle_surface = pygame.Surface((ENVIRONMENT_WIDTH, ENVIRONMENT_HEIGHT), pygame.SRCALPHA)
+                    pygame.draw.circle(circle_surface, (*circle_color, alpha), (int(x), int(y)), int(max_reachable_distance), width)
+                    screen.blit(circle_surface, (0, 0))
+                
+                # Draw a very faint filled circle to show the reachable area
+                filled_alpha = int(20 + 15 * pulse_intensity)  # Alpha between 20 and 35
+                filled_surface = pygame.Surface((ENVIRONMENT_WIDTH, ENVIRONMENT_HEIGHT), pygame.SRCALPHA)
+                pygame.draw.circle(filled_surface, (*circle_color, filled_alpha), (int(x), int(y)), int(max_reachable_distance))
+                screen.blit(filled_surface, (0, 0))
 
             # Update the display
             pygame.display.flip()

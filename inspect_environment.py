@@ -99,7 +99,10 @@ if __name__ == "__main__":
     print("    Cyan dashed path: Dynamically feasible path respecting agent motion constraints")
     print("  Other:")
     print("    F: Toggle agent-following mode")
-    print("    O: Toggle probability overlay (colors only visible map graph nodes based on distance)")
+    print("    O: Toggle probability overlay (colors nodes based on reachability within time horizon)")
+    print("    B: Toggle visibility gaps (shows ray casting discontinuities in blue lines)")
+    print("    +/=: Increase time horizon (when probability overlay is enabled)")
+    print("    -: Decrease time horizon (when probability overlay is enabled)")
     print("    ESC: Quit the application")
     
     # Advanced options information
