@@ -103,6 +103,7 @@ if __name__ == "__main__":
     print("    B: Toggle visibility gaps (shows ray casting discontinuities with orientation-based colors)")
     print("       Blue gaps: Near-to-far transitions (expanding visibility)")
     print("       Violet gaps: Far-to-near transitions (contracting visibility)")
+    print("    H: Toggle extended probability set (shows gap arcs instead of green visibility lines)")
     print("    Y: Toggle rotating rods (requires: visibility data + node selected + probability overlay ON)")
     print("    Z: Auto-enable all rotating rods features (F+O+B+Y) - Single shortcut activation")
     print("    +/=: Increase time horizon (when probability overlay is enabled)")

@@ -318,6 +318,9 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
     # Initialize visibility gaps display variable
     show_visibility_gaps = False
     
+    # Initialize extended probability set (gap arcs) display variable
+    show_extended_probability_set = False
+    
     # Initialize rotating rods display variable
     show_rotating_rods = False
     
@@ -589,6 +592,13 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                             print("Visibility gaps: ON - Showing ray casting discontinuities in blue lines")
                         else:
                             print("Visibility gaps: OFF")
+                    elif event.key == pygame.K_h:
+                        # Toggle extended probability set (gap arcs) display
+                        show_extended_probability_set = not show_extended_probability_set
+                        if show_extended_probability_set:
+                            print("Extended probability set: ON - Showing gap arcs (ray casting discontinuities)")
+                        else:
+                            print("Extended probability set: OFF")
                     elif event.key == pygame.K_y:
                         # Toggle rotating rods display
                         show_rotating_rods = not show_rotating_rods
@@ -1123,20 +1133,100 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                                 else:
                                     node_distance_groups['far'].append(visible_node)
                         
-                        # Draw lines to close nodes (bright green)
-                        for visible_node in node_distance_groups['close']:
-                            pygame.draw.line(screen, (50, 255, 50), selected_node, visible_node, 2)
-                            pygame.draw.circle(screen, (50, 255, 50), visible_node, 5)
-                        
-                        # Draw lines to medium-range nodes (yellow-green)
-                        for visible_node in node_distance_groups['medium']:
-                            pygame.draw.line(screen, (150, 255, 30), selected_node, visible_node, 1)
-                            pygame.draw.circle(screen, (150, 255, 30), visible_node, 4)
-                        
-                        # Draw lines to far nodes (faded green)
-                        for visible_node in node_distance_groups['far']:
-                            pygame.draw.line(screen, (100, 180, 30, 150), selected_node, visible_node, 1)
-                            pygame.draw.circle(screen, (100, 180, 30), visible_node, 3)
+                        # Conditionally draw either green visibility lines OR gap arcs based on 'H' key toggle
+                        if show_extended_probability_set:
+                            # Show extended probability set (gap arcs) instead of green visibility lines
+                            # Import vision utilities
+                            from multitrack.utils.vision import cast_vision_ray
+                            
+                            # Cast rays in all directions to find visibility discontinuities
+                            num_rays = 360  # Every 1 degree for much finer resolution
+                            angle_step = (2 * math.pi) / num_rays
+                            ray_endpoints = []
+                            
+                            # Cast rays in all directions
+                            for i in range(num_rays):
+                                angle = i * angle_step
+                                endpoint = cast_vision_ray(
+                                    selected_node[0], 
+                                    selected_node[1], 
+                                    angle, 
+                                    MAP_GRAPH_VISIBILITY_RANGE,
+                                    environment.get_all_walls(),
+                                    environment.get_doors()  # Doors allow vision through
+                                )
+                                ray_endpoints.append(endpoint)
+                            
+                            # Find discontinuities in ray distances and connect successive rays with abrupt changes
+                            min_gap_distance = 30  # Minimum distance difference to consider a gap
+                            gap_lines = []
+                            
+                            for i in range(num_rays):
+                                current_endpoint = ray_endpoints[i]
+                                next_endpoint = ray_endpoints[(i + 1) % num_rays]  # Wrap around
+                                
+                                # Calculate distances from selected node
+                                current_dist = math.dist(selected_node, current_endpoint)
+                                next_dist = math.dist(selected_node, next_endpoint)
+                                
+                                # Check for significant distance change (gap) between successive rays
+                                distance_diff = abs(current_dist - next_dist)
+                                if distance_diff > min_gap_distance:
+                                    # Record this gap line connecting the two successive ray endpoints
+                                    gap_lines.append((current_endpoint, next_endpoint, distance_diff))
+                            
+                            # Draw all the gap lines with orientation-based coloring
+                            for start_point, end_point, gap_size in gap_lines:
+                                # Determine gap orientation relative to clockwise ray casting
+                                start_dist = math.dist(selected_node, start_point)
+                                end_dist = math.dist(selected_node, end_point)
+                                
+                                # Classify gap type based on distance progression
+                                is_near_to_far = start_dist < end_dist  # Near point first, far point second
+                                is_far_to_near = start_dist > end_dist  # Far point first, near point second
+                                
+                                # Choose base color based on gap orientation
+                                if is_near_to_far:
+                                    # Blue for near-to-far transitions (expanding gaps)
+                                    base_color = (0, 100, 255) if gap_size > 150 else (50, 150, 255) if gap_size > 80 else (100, 200, 255)
+                                elif is_far_to_near:
+                                    # Violet for far-to-near transitions (contracting gaps)
+                                    base_color = (150, 0, 255) if gap_size > 150 else (180, 50, 255) if gap_size > 80 else (200, 100, 255)
+                                else:
+                                    # Fallback color for equal distances (rare case)
+                                    base_color = (100, 100, 100)
+                                
+                                # Determine line width based on gap size
+                                if gap_size > 150:
+                                    line_width = 3
+                                elif gap_size > 80:
+                                    line_width = 2
+                                else:
+                                    line_width = 1
+                                
+                                # Draw the gap line connecting successive ray endpoints
+                                pygame.draw.line(screen, base_color, start_point, end_point, line_width)
+                                
+                                # Draw small circles at the gap endpoints to highlight them
+                                circle_size = max(2, min(5, int(gap_size / 30)))
+                                pygame.draw.circle(screen, base_color, start_point, circle_size)
+                                pygame.draw.circle(screen, base_color, end_point, circle_size)
+                        else:
+                            # Show original green visibility lines
+                            # Draw lines to close nodes (bright green)
+                            for visible_node in node_distance_groups['close']:
+                                pygame.draw.line(screen, (50, 255, 50), selected_node, visible_node, 2)
+                                pygame.draw.circle(screen, (50, 255, 50), visible_node, 5)
+                            
+                            # Draw lines to medium-range nodes (yellow-green)
+                            for visible_node in node_distance_groups['medium']:
+                                pygame.draw.line(screen, (150, 255, 30), selected_node, visible_node, 1)
+                                pygame.draw.circle(screen, (150, 255, 30), visible_node, 4)
+                            
+                            # Draw lines to far nodes (faded green)
+                            for visible_node in node_distance_groups['far']:
+                                pygame.draw.line(screen, (100, 180, 30, 150), selected_node, visible_node, 1)
+                                pygame.draw.circle(screen, (100, 180, 30), visible_node, 3)
                             
                         # VISIBILITY GAPS VISUALIZATION: Draw ray casting discontinuities (abrupt changes in visibility)
                         if show_visibility_gaps:
