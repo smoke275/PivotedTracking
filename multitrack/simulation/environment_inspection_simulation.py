@@ -89,8 +89,9 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
     from multitrack.models.agents.visitor_agent import UnicycleModel
     
     AGENT_STATE_FILE = os.path.join(os.path.dirname(__file__), 'agent_state.pkl')
+    AGENT2_STATE_FILE = os.path.join(os.path.dirname(__file__), 'agent2_state.pkl')
     
-    # Try to load agent state from file
+    # Try to load first agent state from file
     agent_state = None
     if os.path.exists(AGENT_STATE_FILE):
         try:
@@ -104,9 +105,24 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
     else:
         agent = UnicycleModel(walls=environment.get_all_walls(), doors=environment.get_doors())
     
+    # Try to load second agent state from file
+    agent2_state = None
+    if os.path.exists(AGENT2_STATE_FILE):
+        try:
+            with open(AGENT2_STATE_FILE, 'rb') as f:
+                agent2_state = pickle.load(f)
+        except Exception as e:
+            print(f"Warning: Could not load agent2 state: {e}")
+    if agent2_state is not None:
+        agent2 = UnicycleModel(initial_position=agent2_state[:2], walls=environment.get_all_walls(), doors=environment.get_doors())
+        agent2.state = agent2_state.copy()
+    else:
+        agent2 = UnicycleModel(walls=environment.get_all_walls(), doors=environment.get_doors())
+    
     AGENT_LINEAR_VEL = LEADER_LINEAR_VEL
     AGENT_ANGULAR_VEL = LEADER_ANGULAR_VEL
-    AGENT_COLOR = (255, 0, 255)  # Bright magenta for maximum visibility
+    AGENT_COLOR = (255, 0, 255)  # Bright magenta for maximum visibility (first agent)
+    AGENT2_COLOR = (0, 255, 255)  # Bright cyan for second agent
     AGENT_RADIUS = 16
 
     # Initialize font for display
@@ -830,6 +846,8 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
 
             # --- AGENT CONTROL (after event handling, before drawing) ---
             keys = pygame.key.get_pressed()
+            
+            # First agent control (arrow keys)
             linear_vel = 0
             angular_vel = 0
             if keys[pygame.K_UP]:
@@ -842,6 +860,20 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 angular_vel = AGENT_ANGULAR_VEL
             agent.set_controls(linear_vel, angular_vel)
             agent.update(dt=0.1, walls=environment.get_all_walls(), doors=environment.get_doors())
+
+            # Second agent control (WASD keys)
+            linear_vel2 = 0
+            angular_vel2 = 0
+            if keys[pygame.K_w]:
+                linear_vel2 = AGENT_LINEAR_VEL
+            if keys[pygame.K_s]:
+                linear_vel2 = -AGENT_LINEAR_VEL
+            if keys[pygame.K_a]:
+                angular_vel2 = -AGENT_ANGULAR_VEL
+            if keys[pygame.K_d]:
+                angular_vel2 = AGENT_ANGULAR_VEL
+            agent2.set_controls(linear_vel2, angular_vel2)
+            agent2.update(dt=0.1, walls=environment.get_all_walls(), doors=environment.get_doors())
 
             # Agent-following functionality
             if follow_agent_mode and visibility_map:
@@ -1020,7 +1052,11 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
             info_text = [
                 "Environment Inspection Mode",
                 f"Size: {ENVIRONMENT_WIDTH}x{ENVIRONMENT_HEIGHT}",
-                "Controls:",
+                "Agent Controls:",
+                "Arrow Keys: Control magenta agent (1st)",
+                "WASD Keys: Control cyan agent (2nd)",
+                "",
+                "Other Controls:",
                 "G: Toggle map graph display",
                 "R: Regenerate map graph (when visible)",
                 "V: Analyze node visibility",
@@ -1928,12 +1964,36 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         screen.blit(path_text, (info_x + 10, y_offset))
                         y_offset += 25
 
-            # Draw the agent
+            # Draw the first agent (magenta - arrow key controlled)
             x, y, theta, _ = agent.state
             pygame.draw.circle(screen, AGENT_COLOR, (int(x), int(y)), AGENT_RADIUS)
             end_x = x + AGENT_RADIUS * 1.2 * math.cos(theta)
             end_y = y + AGENT_RADIUS * 1.2 * math.sin(theta)
             pygame.draw.line(screen, (255,255,255), (x, y), (end_x, end_y), 3)
+            
+            # Add label for first agent
+            label_font = pygame.font.SysFont('Arial', 14, bold=True)
+            label_text = label_font.render("↑", True, (255, 255, 255))
+            label_bg = pygame.Surface((label_text.get_width() + 4, label_text.get_height() + 2))
+            label_bg.fill((100, 0, 100))
+            label_bg.set_alpha(180)
+            screen.blit(label_bg, (int(x) - label_text.get_width()//2 - 2, int(y) - AGENT_RADIUS - 20))
+            screen.blit(label_text, (int(x) - label_text.get_width()//2, int(y) - AGENT_RADIUS - 19))
+            
+            # Draw the second agent (cyan - WASD controlled)
+            x2, y2, theta2, _ = agent2.state
+            pygame.draw.circle(screen, AGENT2_COLOR, (int(x2), int(y2)), AGENT_RADIUS)
+            end_x2 = x2 + AGENT_RADIUS * 1.2 * math.cos(theta2)
+            end_y2 = y2 + AGENT_RADIUS * 1.2 * math.sin(theta2)
+            pygame.draw.line(screen, (255,255,255), (x2, y2), (end_x2, end_y2), 3)
+            
+            # Add label for second agent
+            label_text2 = label_font.render("W", True, (255, 255, 255))
+            label_bg2 = pygame.Surface((label_text2.get_width() + 4, label_text2.get_height() + 2))
+            label_bg2.fill((0, 100, 100))
+            label_bg2.set_alpha(180)
+            screen.blit(label_bg2, (int(x2) - label_text2.get_width()//2 - 2, int(y2) - AGENT_RADIUS - 20))
+            screen.blit(label_text2, (int(x2) - label_text2.get_width()//2, int(y2) - AGENT_RADIUS - 19))
             
             # Draw reachability circle LAST (on top of everything) when probability overlay is enabled
             if show_probability_overlay:
@@ -1965,12 +2025,18 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
             # Cap the frame rate
             clock.tick(60)
     finally:
-        # Save agent state on exit
+        # Save agent states on exit
         try:
             with open(AGENT_STATE_FILE, 'wb') as f:
                 pickle.dump(agent.state, f)
         except Exception as e:
             print(f"Warning: Could not save agent state: {e}")
+            
+        try:
+            with open(AGENT2_STATE_FILE, 'wb') as f:
+                pickle.dump(agent2.state, f)
+        except Exception as e:
+            print(f"Warning: Could not save agent2 state: {e}")
 
     pygame.quit()
     sys.exit()
