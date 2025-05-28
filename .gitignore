@@ -50,7 +50,7 @@ map_graph_cache.pkl
 inspection_map_graph_cache.pkl
 graph_visibility_cache.pkl
 *.pkl  # Any custom pickle cache files
-multitrack/simulation/agent_state.pkl  # Explicitly ignore this file
 
-# Agent state file
-/multitrack/simulation/agent_state.pkl
+# Agent state files (dual agent implementation)
+multitrack/simulation/agent_state.pkl
+multitrack/simulation/agent2_state.pkl
