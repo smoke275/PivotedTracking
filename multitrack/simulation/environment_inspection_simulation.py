@@ -18,6 +18,48 @@ from multitrack.utils.map_graph import MapGraph
 from multitrack.utils.pathfinding import find_shortest_path, calculate_path_length, smooth_path, create_dynamically_feasible_path, find_closest_node
 from multitrack.utils.optimize_path import optimize_path_with_visibility
 
+def point_to_line_distance(point, line_start, line_end):
+    """
+    Calculate the shortest distance from a point to a line segment.
+    
+    Args:
+        point: Tuple (x, y) representing the point
+        line_start: Tuple (x, y) representing the start of the line segment
+        line_end: Tuple (x, y) representing the end of the line segment
+    
+    Returns:
+        float: The shortest distance from the point to the line segment
+    """
+    px, py = point
+    x1, y1 = line_start
+    x2, y2 = line_end
+    
+    A = px - x1
+    B = py - y1
+    C = x2 - x1
+    D = y2 - y1
+    
+    dot = A * C + B * D
+    len_sq = C * C + D * D
+    param = -1
+    
+    if len_sq != 0:
+        param = dot / len_sq
+    
+    if param < 0:
+        xx = x1
+        yy = y1
+    elif param > 1:
+        xx = x2
+        yy = y2
+    else:
+        xx = x1 + param * C
+        yy = y1 + param * D
+    
+    dx = px - xx
+    dy = py - yy
+    return math.sqrt(dx * dx + dy * dy)
+
 def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=False, load_visibility=False, visibility_cache_file=None):
     pygame.init()
 
@@ -275,6 +317,9 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
     
     # Initialize visibility gaps display variable
     show_visibility_gaps = False
+    
+    # Initialize rotating rods display variable
+    show_rotating_rods = False
     
     # Time horizon parameters for probability overlay
     time_horizon = 4.0  # Look-ahead time in seconds
@@ -544,6 +589,71 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                             print("Visibility gaps: ON - Showing ray casting discontinuities in blue lines")
                         else:
                             print("Visibility gaps: OFF")
+                    elif event.key == pygame.K_y:
+                        # Toggle rotating rods display
+                        show_rotating_rods = not show_rotating_rods
+                        if show_rotating_rods:
+                            print("Rotating rods: ON - Showing temporal coverage degradation during rotation")
+                            # Check if prerequisites are met
+                            if not show_probability_overlay:
+                                print("  Warning: Probability overlay is OFF. Press O to enable it first.")
+                            elif not visibility_map:
+                                print("  Warning: No visibility data available. Press V to analyze or L to load.")
+                            elif selected_node_index is None or selected_node_index not in visibility_map:
+                                print("  Warning: No valid node selected. Click on a node or press N to select one.")
+                            else:
+                                print("  All prerequisites met - rotating rods should be visible when gaps are detected.")
+                        else:
+                            print("Rotating rods: OFF")
+                    elif event.key == pygame.K_z:
+                        # Z key: Auto-enable all rotating rods features (F+O+B+Y)
+                        print("Z pressed: Enabling all rotating rods features automatically...")
+                        
+                        # 1. Enable agent-following mode (F key)
+                        if not follow_agent_mode:
+                            follow_agent_mode = True
+                            print("  ✓ Agent-following mode: ON")
+                            # Initialize agent position tracking
+                            agent_last_position = (agent.state[0], agent.state[1])
+                            # Find closest node to current agent position
+                            agent_pos = (agent.state[0], agent.state[1])
+                            agent_following_node_index = find_closest_node(map_graph.nodes, agent_pos)
+                            if agent_following_node_index is not None and visibility_map:
+                                selected_node_index = agent_following_node_index
+                                print(f"    Following agent at node {selected_node_index}")
+                        else:
+                            print("  ✓ Agent-following mode: Already ON")
+                        
+                        # 2. Enable probability overlay (O key)
+                        if not show_probability_overlay:
+                            show_probability_overlay = True
+                            print("  ✓ Probability overlay: ON")
+                        else:
+                            print("  ✓ Probability overlay: Already ON")
+                        
+                        # 3. Enable visibility gaps display (B key)
+                        if not show_visibility_gaps:
+                            show_visibility_gaps = True
+                            print("  ✓ Visibility gaps: ON")
+                        else:
+                            print("  ✓ Visibility gaps: Already ON")
+                        
+                        # 4. Enable rotating rods display (Y key)
+                        if not show_rotating_rods:
+                            show_rotating_rods = True
+                            print("  ✓ Rotating rods: ON")
+                        else:
+                            print("  ✓ Rotating rods: Already ON")
+                        
+                        # Check for prerequisites and warn if any are missing
+                        if not visibility_map:
+                            print("  ⚠ Warning: No visibility data available. Press V to analyze or L to load.")
+                        elif selected_node_index is None or selected_node_index not in visibility_map:
+                            print("  ⚠ Warning: No valid node selected. Move agent or click on a node.")
+                        else:
+                            print("  ✓ All features enabled successfully! Rotating rods system is ready.")
+                        
+                        print("Complete rotating rods system activated. Use arrow keys to move and observe the enhanced visualization.")
                     elif event.key == pygame.K_PLUS or event.key == pygame.K_EQUALS:
                         # Increase time horizon
                         if show_probability_overlay:
@@ -910,6 +1020,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 "F: Toggle agent-following mode",
                 f"O: Toggle probability overlay {'(ON)' if show_probability_overlay else '(OFF)'} - requires visibility data",
                 f"B: Toggle visibility gaps {'(ON)' if show_visibility_gaps else '(OFF)'} - requires visibility data",
+                f"Y: Toggle rotating rods {'(ON)' if show_rotating_rods else '(OFF)'} - requires probability overlay & visibility",
             ]
             
             # Add time horizon info when probability overlay is enabled
@@ -1068,26 +1179,386 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                                     # Record this gap line connecting the two successive ray endpoints
                                     gap_lines.append((current_endpoint, next_endpoint, distance_diff))
                             
-                            # Draw all the gap lines
+                            # Draw all the gap lines with orientation-based coloring
                             for start_point, end_point, gap_size in gap_lines:
-                                # Determine color intensity and line width based on gap size
+                                # Determine gap orientation relative to clockwise ray casting
+                                start_dist = math.dist(selected_node, start_point)
+                                end_dist = math.dist(selected_node, end_point)
+                                
+                                # Classify gap type based on distance progression
+                                is_near_to_far = start_dist < end_dist  # Near point first, far point second
+                                is_far_to_near = start_dist > end_dist  # Far point first, near point second
+                                
+                                # Choose base color based on gap orientation
+                                if is_near_to_far:
+                                    # Blue for near-to-far transitions (expanding gaps)
+                                    base_color = (0, 100, 255) if gap_size > 150 else (50, 150, 255) if gap_size > 80 else (100, 200, 255)
+                                elif is_far_to_near:
+                                    # Violet for far-to-near transitions (contracting gaps)
+                                    base_color = (150, 0, 255) if gap_size > 150 else (180, 50, 255) if gap_size > 80 else (200, 100, 255)
+                                else:
+                                    # Fallback color for equal distances (rare case)
+                                    base_color = (100, 100, 100)
+                                
+                                # Determine line width based on gap size
                                 if gap_size > 150:
-                                    gap_color = (0, 100, 255)      # Bright blue for large gaps
                                     line_width = 3
                                 elif gap_size > 80:
-                                    gap_color = (50, 150, 255)     # Medium blue for medium gaps
                                     line_width = 2
                                 else:
-                                    gap_color = (100, 200, 255)    # Light blue for small gaps
                                     line_width = 1
                                 
                                 # Draw the gap line connecting successive ray endpoints
-                                pygame.draw.line(screen, gap_color, start_point, end_point, line_width)
+                                pygame.draw.line(screen, base_color, start_point, end_point, line_width)
                                 
                                 # Draw small circles at the gap endpoints to highlight them
                                 circle_size = max(2, min(5, int(gap_size / 30)))
-                                pygame.draw.circle(screen, gap_color, start_point, circle_size)
-                                pygame.draw.circle(screen, gap_color, end_point, circle_size)
+                                pygame.draw.circle(screen, base_color, start_point, circle_size)
+                                pygame.draw.circle(screen, base_color, end_point, circle_size)
+                            
+                            # ROTATING RODS VISUALIZATION: Show swept areas and rotation indicators
+                            if show_rotating_rods and show_probability_overlay and node_probabilities:
+                                # Process gaps to show static swept areas
+                                for start_point, end_point, gap_size in gap_lines:
+                                    # Only process significant gaps
+                                    if gap_size < 50:
+                                        continue
+                                    
+                                    # Determine gap orientation and near/far points
+                                    start_dist = math.dist(selected_node, start_point)
+                                    end_dist = math.dist(selected_node, end_point)
+                                    
+                                    # Determine near point (pivot point) and far point
+                                    if start_dist < end_dist:
+                                        near_point = start_point
+                                        far_point = end_point
+                                        is_blue_gap = True  # Near-to-far (expanding)
+                                    else:
+                                        near_point = end_point
+                                        far_point = start_point
+                                        is_blue_gap = False  # Far-to-near (contracting)
+                                    
+                                    # Calculate initial rod angle (along the gap line from near to far point)
+                                    initial_rod_angle = math.atan2(far_point[1] - near_point[1], far_point[0] - near_point[0])
+                                    
+                                    # Calculate rod length: should extend from near point to the edge of reachability circle
+                                    # Get agent position and max reachable distance
+                                    agent_x, agent_y = agent.state[0], agent.state[1]
+                                    max_reachable_distance = time_horizon * LEADER_LINEAR_VEL
+                                    
+                                    # Calculate distance from agent to rod base (near point)
+                                    distance_to_rod_base = math.sqrt((near_point[0] - agent_x)**2 + (near_point[1] - agent_y)**2)
+                                    
+                                    # Calculate maximum rod length that stays within reachability circle
+                                    if distance_to_rod_base >= max_reachable_distance:
+                                        # Rod base is outside reachability circle, use minimal rod
+                                        rod_length = 10
+                                    else:
+                                        # Rod length = remaining distance from base to circle edge
+                                        remaining_distance_to_circle = max_reachable_distance - distance_to_rod_base
+                                        
+                                        # Also consider the original gap size as a constraint
+                                        original_gap_rod_length = math.dist(near_point, far_point)
+                                        
+                                        # Use the smaller of the two: gap size or remaining circle distance
+                                        rod_length = min(remaining_distance_to_circle, original_gap_rod_length)
+                                        
+                                        # Ensure minimum rod length for visibility
+                                        rod_length = max(20, rod_length)
+                                    
+                                    max_rotation = math.pi / 4  # Maximum 45 degrees rotation
+                                    
+                                    # Determine rotation direction based on gap color
+                                    if is_blue_gap:
+                                        rotation_direction = -1  # Anticlockwise (counterclockwise)
+                                        gap_color = (100, 150, 255)  # Blue tone
+                                    else:
+                                        rotation_direction = 1   # Clockwise
+                                        gap_color = (200, 100, 255)  # Violet tone
+                                    
+                                    # SINGLE DIRECTION ROTATION: Rod pivots at near point, rotates in one direction only
+                                    rod_base = near_point
+                                    
+                                    # Calculate the swept arc range
+                                    sweep_start_angle = initial_rod_angle
+                                    sweep_end_angle = initial_rod_angle + max_rotation * rotation_direction
+                                    
+                                    # Draw rod base indicator (pivot point)
+                                    pygame.draw.circle(screen, (255, 255, 0), rod_base, 8)
+                                    pygame.draw.circle(screen, (255, 150, 0), rod_base, 4)
+                                    
+                                    # Draw initial rod position (gap line)
+                                    initial_rod_end = (
+                                        rod_base[0] + rod_length * math.cos(initial_rod_angle),
+                                        rod_base[1] + rod_length * math.sin(initial_rod_angle)
+                                    )
+                                    pygame.draw.line(screen, gap_color, rod_base, initial_rod_end, 3)
+                                    
+                                    # Draw the swept area
+                                    sweep_surface = pygame.Surface((screen.get_width(), screen.get_height()), pygame.SRCALPHA)
+                                    
+                                    # Use gap color for swept area with transparency
+                                    sweep_color = (*gap_color, 60)
+                                    
+                                    # Draw the swept arc area as a polygon
+                                    arc_points = [rod_base]
+                                    num_arc_points = 20
+                                    for i in range(num_arc_points + 1):
+                                        t = i / num_arc_points
+                                        angle = sweep_start_angle + t * (sweep_end_angle - sweep_start_angle)
+                                        point = (
+                                            rod_base[0] + rod_length * math.cos(angle),
+                                            rod_base[1] + rod_length * math.sin(angle)
+                                        )
+                                        arc_points.append(point)
+                                    
+                                    pygame.draw.polygon(sweep_surface, sweep_color, arc_points)
+                                    screen.blit(sweep_surface, (0, 0))
+                                    
+                                    # Draw the boundary lines of the swept area
+                                    boundary_color = gap_color
+                                    start_boundary = (
+                                        rod_base[0] + rod_length * math.cos(sweep_start_angle),
+                                        rod_base[1] + rod_length * math.sin(sweep_start_angle)
+                                    )
+                                    end_boundary = (
+                                        rod_base[0] + rod_length * math.cos(sweep_end_angle),
+                                        rod_base[1] + rod_length * math.sin(sweep_end_angle)
+                                    )
+                                    pygame.draw.line(screen, boundary_color, rod_base, start_boundary, 2)
+                                    pygame.draw.line(screen, boundary_color, rod_base, end_boundary, 2)
+                                    
+                                    # Draw rotation direction indicator
+                                    indicator_radius = 25
+                                    indicator_start_angle = initial_rod_angle + (math.pi/8) * rotation_direction * 0.3
+                                    indicator_end_angle = initial_rod_angle + (math.pi/6) * rotation_direction
+                                    
+                                    # Draw curved arrow showing rotation direction
+                                    arrow_color = (255, 255, 255)
+                                    num_arrow_segments = 6
+                                    for i in range(num_arrow_segments):
+                                        t1 = i / num_arrow_segments
+                                        t2 = (i + 1) / num_arrow_segments
+                                        angle1 = indicator_start_angle + t1 * (indicator_end_angle - indicator_start_angle)
+                                        angle2 = indicator_start_angle + t2 * (indicator_end_angle - indicator_start_angle)
+                                        
+                                        point1 = (
+                                            rod_base[0] + indicator_radius * math.cos(angle1),
+                                            rod_base[1] + indicator_radius * math.sin(angle1)
+                                        )
+                                        point2 = (
+                                            rod_base[0] + indicator_radius * math.cos(angle2),
+                                            rod_base[1] + indicator_radius * math.sin(angle2)
+                                        )
+                                        pygame.draw.line(screen, arrow_color, point1, point2, 3)
+                                    
+                                    # Draw arrow head
+                                    arrow_head_size = 8
+                                    arrow_tip = (
+                                        rod_base[0] + indicator_radius * math.cos(indicator_end_angle),
+                                        rod_base[1] + indicator_radius * math.sin(indicator_end_angle)
+                                    )
+                                    arrow_head1 = (
+                                        arrow_tip[0] - arrow_head_size * math.cos(indicator_end_angle + 2.8),
+                                        arrow_tip[1] - arrow_head_size * math.sin(indicator_end_angle + 2.8)
+                                    )
+                                    arrow_head2 = (
+                                        arrow_tip[0] - arrow_head_size * math.cos(indicator_end_angle - 2.8),
+                                        arrow_tip[1] - arrow_head_size * math.sin(indicator_end_angle - 2.8)
+                                    )
+                                    pygame.draw.line(screen, arrow_color, arrow_tip, arrow_head1, 3)
+                                    pygame.draw.line(screen, arrow_color, arrow_tip, arrow_head2, 3)
+                                    
+                                    # OPTIMIZED GRADIENT-BASED PROBABILITY PROPAGATION
+                                    # Step 1: Record probability values at gap endpoints
+                                    
+                                    # Find probability at near point (rod base)
+                                    near_point_prob = 0.0
+                                    min_distance_near = float('inf')
+                                    for node_idx, prob in node_probabilities.items():
+                                        node_pos = map_graph.nodes[node_idx]
+                                        dist_to_near = math.dist(node_pos, near_point)
+                                        if dist_to_near < min_distance_near and dist_to_near < 50:  # Within 50px
+                                            min_distance_near = dist_to_near
+                                            near_point_prob = prob
+                                    
+                                    # Find probability at far point (gap end)
+                                    far_point_prob = 0.0
+                                    min_distance_far = float('inf')
+                                    far_point_actual = (
+                                        rod_base[0] + rod_length * math.cos(initial_rod_angle),
+                                        rod_base[1] + rod_length * math.sin(initial_rod_angle)
+                                    )
+                                    for node_idx, prob in node_probabilities.items():
+                                        node_pos = map_graph.nodes[node_idx]
+                                        dist_to_far = math.dist(node_pos, far_point_actual)
+                                        if dist_to_far < min_distance_far and dist_to_far < 50:  # Within 50px
+                                            min_distance_far = dist_to_far
+                                            far_point_prob = prob
+                                    
+                                    # If no probabilities found nearby, use default values
+                                    if near_point_prob == 0.0 and far_point_prob == 0.0:
+                                        near_point_prob = 0.3  # Default probability at near point
+                                        far_point_prob = 0.1   # Lower probability at far point
+                                    
+                                    # Step 2: FAST GRID PROCESSING - optimized for speed
+                                    propagated_probabilities = {}
+                                    
+                                    # REDUCED grid density for better performance
+                                    angle_steps = 15  # Reduced from 40
+                                    radius_steps = 8  # Reduced from 20
+                                    
+                                    # Calculate sweep bounds
+                                    total_sweep_angle = abs(sweep_end_angle - sweep_start_angle)
+                                    
+                                    # PRE-FILTER: Only consider nodes that are NOT already probabilized and in general area
+                                    candidate_nodes = []
+                                    arc_center_x = rod_base[0] + (rod_length / 2) * math.cos(initial_rod_angle)
+                                    arc_center_y = rod_base[1] + (rod_length / 2) * math.sin(initial_rod_angle)
+                                    filter_radius = rod_length + 50  # General area around the arc
+                                    
+                                    for j, node in enumerate(map_graph.nodes):
+                                        if j not in node_probabilities:  # Skip nodes with existing probabilities
+                                            # Quick distance check to arc center
+                                            dx = node[0] - arc_center_x
+                                            dy = node[1] - arc_center_y
+                                            if dx*dx + dy*dy <= filter_radius*filter_radius:  # Avoid sqrt
+                                                candidate_nodes.append((j, node))
+                                    
+                                    # Process grid points with optimized node search
+                                    search_radius = 25
+                                    search_radius_sq = search_radius * search_radius  # Avoid sqrt in distance calc
+                                    
+                                    for a in range(angle_steps + 1):
+                                        for r in range(1, radius_steps + 1):
+                                            angle_progress = a / angle_steps
+                                            radius_progress = r / radius_steps
+                                            current_angle = sweep_start_angle + angle_progress * (sweep_end_angle - sweep_start_angle)
+                                            current_radius = radius_progress * rod_length
+                                            
+                                            sweep_x = rod_base[0] + current_radius * math.cos(current_angle)
+                                            sweep_y = rod_base[1] + current_radius * math.sin(current_angle)
+                                            
+                                            # Boundary check (avoid sqrt)
+                                            dx_agent = sweep_x - agent_x
+                                            dy_agent = sweep_y - agent_y
+                                            dist_sq_agent = dx_agent*dx_agent + dy_agent*dy_agent
+                                            
+                                            if dist_sq_agent <= max_reachable_distance*max_reachable_distance:
+                                                # Calculate probability with stronger distance-based decay
+                                                base_probability = (1 - radius_progress) * near_point_prob + radius_progress * far_point_prob
+                                                
+                                                # Stronger angular decay - harder to reach at wider angles
+                                                angular_decay = max(0.1, 1.0 - (angle_progress * 0.8))
+                                                
+                                                # Distance-based decay - exponential decay with distance from rod base
+                                                distance_decay = max(0.2, 1.0 - (radius_progress ** 1.5) * 0.7)
+                                                
+                                                # Overall propagation decay
+                                                propagation_decay = 0.7
+                                                
+                                                final_probability = base_probability * angular_decay * distance_decay * propagation_decay
+                                                
+                                                if final_probability > 0.03:  # Only store significant probabilities
+                                                    # FAST node search - only through pre-filtered candidates
+                                                    closest_node_idx = None
+                                                    closest_distance_sq = search_radius_sq
+                                                    
+                                                    for node_idx, node in candidate_nodes:
+                                                        dx = node[0] - sweep_x
+                                                        dy = node[1] - sweep_y
+                                                        dist_sq = dx*dx + dy*dy  # Avoid sqrt
+                                                        
+                                                        if dist_sq < closest_distance_sq:
+                                                            closest_distance_sq = dist_sq
+                                                            closest_node_idx = node_idx
+                                                    
+                                                    # Assign probability
+                                                    if closest_node_idx is not None:
+                                                        if closest_node_idx in propagated_probabilities:
+                                                            propagated_probabilities[closest_node_idx] = max(
+                                                                propagated_probabilities[closest_node_idx], final_probability)
+                                                        else:
+                                                            propagated_probabilities[closest_node_idx] = final_probability
+                                    
+                                    # Step 3: INTERPOLATION - Fill gaps using neighboring cell approximation
+                                    # Create a spatial lookup for faster neighbor finding
+                                    filled_nodes = {}  # node_idx -> (position, probability)
+                                    for node_idx, prob in propagated_probabilities.items():
+                                        if node_idx < len(map_graph.nodes):
+                                            filled_nodes[node_idx] = (map_graph.nodes[node_idx], prob)
+                                    
+                                    # Find unfilled nodes in the swept area and interpolate their values
+                                    interpolation_radius = 40  # Look for neighbors within this radius
+                                    interpolation_radius_sq = interpolation_radius * interpolation_radius
+                                    
+                                    for node_idx, node in candidate_nodes:
+                                        if node_idx not in propagated_probabilities:  # Only process unfilled nodes
+                                            # Check if this node is actually within the swept arc
+                                            node_to_base = math.atan2(node[1] - rod_base[1], node[0] - rod_base[0])
+                                            
+                                            # Normalize angle to same range as sweep angles
+                                            while node_to_base < sweep_start_angle - math.pi:
+                                                node_to_base += 2 * math.pi
+                                            while node_to_base > sweep_start_angle + math.pi:
+                                                node_to_base -= 2 * math.pi
+                                            
+                                            # Check if within sweep bounds
+                                            if rotation_direction > 0:  # Clockwise
+                                                in_sweep = sweep_start_angle <= node_to_base <= sweep_end_angle
+                                            else:  # Counterclockwise
+                                                in_sweep = sweep_end_angle <= node_to_base <= sweep_start_angle
+                                            
+                                            if in_sweep:
+                                                # Check distance from rod base
+                                                dist_from_base = math.dist(node, rod_base)
+                                                if dist_from_base <= rod_length:
+                                                    # This node is in the swept area but unfilled - interpolate
+                                                    neighbor_probs = []
+                                                    neighbor_weights = []
+                                                    
+                                                    # Find nearby filled nodes
+                                                    for filled_idx, (filled_pos, filled_prob) in filled_nodes.items():
+                                                        dx = node[0] - filled_pos[0]
+                                                        dy = node[1] - filled_pos[1]
+                                                        dist_sq = dx*dx + dy*dy
+                                                        
+                                                        if dist_sq <= interpolation_radius_sq and dist_sq > 0:
+                                                            # Weight by inverse distance
+                                                            weight = 1.0 / (1.0 + math.sqrt(dist_sq))
+                                                            neighbor_probs.append(filled_prob)
+                                                            neighbor_weights.append(weight)
+                                                    
+                                                    # Interpolate if we found neighbors
+                                                    if neighbor_probs:
+                                                        # Weighted average
+                                                        total_weight = sum(neighbor_weights)
+                                                        if total_weight > 0:
+                                                            interpolated_prob = sum(p * w for p, w in zip(neighbor_probs, neighbor_weights)) / total_weight
+                                                            
+                                                            # Apply stronger decay based on distance from rod base
+                                                            decay_factor = max(0.2, 1.0 - (dist_from_base / rod_length) * 0.7)
+                                                            final_interpolated_prob = interpolated_prob * decay_factor
+                                                            
+                                                            if final_interpolated_prob > 0.02:  # Slightly lower threshold for interpolated values
+                                                                propagated_probabilities[node_idx] = final_interpolated_prob
+                                    
+                                    # Step 4: Draw propagated probability nodes with RED colors
+                                    for node_idx, propagated_prob in propagated_probabilities.items():
+                                        if node_idx < len(map_graph.nodes):
+                                            node = map_graph.nodes[node_idx]
+                                            
+                                            # Use RED color scheme to match original probability overlay
+                                            red_intensity = int(propagated_prob * 255)
+                                            prob_color = (red_intensity, max(0, 100 - red_intensity), max(0, 100 - red_intensity))
+                                            
+                                            # Draw propagated probability node with size based on probability
+                                            prop_size = int(4 + propagated_prob * 4)  # Size 4-8 based on probability
+                                            pygame.draw.circle(screen, prob_color, node, prop_size)
+                                            
+                                            # Add subtle glow effect for high probability nodes
+                                            if propagated_prob > 0.4:
+                                                pygame.draw.circle(screen, (red_intensity, 50, 50, 100), node, prop_size + 2)
                     
                     # THIRD PASS: Draw ALL probability overlay nodes on top of visibility visualization
                     if show_probability_overlay and node_probabilities:
@@ -1108,7 +1579,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                                 if probability > 0.7:
                                     pygame.draw.circle(screen, (red_intensity, 50, 50, 100), node, node_size + 2)
                     
-                    # FOURTH PASS: Redraw any nodes with mouse hover effects on top of everything
+                    # FOURTH PASS: Mouse hover effects and selected node highlight
                     mouse_x, mouse_y = pygame.mouse.get_pos()
                     for i, node in enumerate(map_graph.nodes):
                         distance = ((node[0] - mouse_x) ** 2 + (node[1] - mouse_y) ** 2) ** 0.5
@@ -1195,6 +1666,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     
                     for i, text in enumerate(visibility_info):
                         # Skip the first item (handled as title)
+
                         if i == 0:
                             # Draw node ID with highlighted color
                             node_text = regular_font.render(text, True, (255, 255, 100))

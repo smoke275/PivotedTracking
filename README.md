@@ -134,6 +134,8 @@ python inspect_environment.py
   - **F**: Toggle agent-following mode
   - **O**: Toggle probability overlay (colors nodes based on reachability within time horizon)
   - **B**: Toggle visibility gaps (shows ray casting discontinuities in blue lines)
+  - **Y**: Toggle rotating rods (shows coverage extensions toward unaccessed high-probability regions)
+  - **Z**: Auto-enable all rotating rods features (F+O+B+Y) - Single shortcut activation
   - **+/-**: Adjust time horizon (when probability overlay is enabled)
 
 ### Reachability Visualization
