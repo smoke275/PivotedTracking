@@ -338,6 +338,9 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
     show_agent2_visibility_gaps = False
     show_agent2_probability_overlay = False
     
+    # Initialize agent 2 rotating rods display variable
+    show_agent2_rods = False
+    
     # Initialize extended probability set (gap arcs) display variable
     show_extended_probability_set = False
     
@@ -602,67 +605,74 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         # Toggle probability overlay
                         show_probability_overlay = not show_probability_overlay
                         if show_probability_overlay:
-                            print("Probability overlay: ON - Showing distance-based probability")
+                            print("Agent 1 probability: ON - Showing distance-based probability")
                         else:
-                            print("Probability overlay: OFF")
+                            print("Agent 1 probability: OFF")
                     elif event.key == pygame.K_b:
                         # Toggle visibility gaps display for first agent
                         show_visibility_gaps = not show_visibility_gaps
                         if show_visibility_gaps:
-                            print("First agent visibility gaps: ON - Showing ray casting discontinuities in blue lines")
+                            print("Agent 1 visibility: ON - Blue gaps for discontinuities")
                         else:
-                            print("First agent visibility gaps: OFF")
+                            print("Agent 1 visibility: OFF")
                     elif event.key == pygame.K_j:
                         # Toggle probability overlay for second agent
                         show_agent2_probability_overlay = not show_agent2_probability_overlay
                         if show_agent2_probability_overlay:
-                            print("Second agent probability overlay: ON - Showing visibility-based probability distribution")
+                            print("Agent 2 probability: ON - Uniform prob within 800px circle, zero outside")
                             # Automatically turn off visibility gaps when enabling probability overlay
                             show_agent2_visibility_gaps = False
+                            # Automatically show rotating rods for agent 2
+                            show_agent2_rods = True
+                            print("Agent 2 rotating rods: ON")
                         else:
-                            print("Second agent probability overlay: OFF")
+                            print("Agent 2 probability: OFF")
+                            # Turn off agent 2's rods when disabling probability overlay
+                            show_agent2_rods = False
                     elif event.key == pygame.K_k:
                         # Toggle visibility gaps display for second agent
                         show_agent2_visibility_gaps = not show_agent2_visibility_gaps
                         if show_agent2_visibility_gaps:
-                            print("Second agent visibility gaps: ON - Showing ray casting discontinuities in cyan lines")
-                            print("Second agent visibility range: ON - Showing camera range circle (800 pixels)")
+                            print("Agent 2 visibility: ON - Cyan gaps and 800px range circle")
                             # Automatically turn off probability overlay when enabling visibility gaps
                             show_agent2_probability_overlay = False
+                            # Turn off agent 2's rods when enabling visibility gaps
+                            show_agent2_rods = False
                         else:
-                            print("Second agent visibility gaps: OFF")
-                            print("Second agent visibility range: OFF")
+                            print("Agent 2 visibility: OFF")
                     elif event.key == pygame.K_h:
                         # Toggle extended probability set (gap arcs) display
                         show_extended_probability_set = not show_extended_probability_set
                         if show_extended_probability_set:
-                            print("Extended probability set: ON - Showing gap arcs (ray casting discontinuities)")
+                            print("Extended probability: ON - Showing gap arcs")
                         else:
-                            print("Extended probability set: OFF")
+                            print("Extended probability: OFF")
                     elif event.key == pygame.K_y:
                         # Toggle rotating rods display
                         show_rotating_rods = not show_rotating_rods
                         if show_rotating_rods:
-                            print("Rotating rods: ON - Showing temporal coverage degradation during rotation")
+                            print("Rotating rods: ON - Showing temporal coverage during rotation")
+                            # Reset agent2_rods when global rods are on
+                            show_agent2_rods = False
                             # Check if prerequisites are met
                             if not show_probability_overlay:
-                                print("  Warning: Probability overlay is OFF. Press O to enable it first.")
+                                print("  Warning: Probability overlay OFF. Press O first.")
                             elif not visibility_map:
-                                print("  Warning: No visibility data available. Press V to analyze or L to load.")
+                                print("  Warning: No visibility data. Press V or L.")
                             elif selected_node_index is None or selected_node_index not in visibility_map:
-                                print("  Warning: No valid node selected. Click on a node or press N to select one.")
+                                print("  Warning: No valid node selected. Click a node.")
                             else:
-                                print("  All prerequisites met - rotating rods should be visible when gaps are detected.")
+                                print("  Ready - rods visible when gaps detected.")
                         else:
                             print("Rotating rods: OFF")
                     elif event.key == pygame.K_z:
                         # Z key: Auto-enable all rotating rods features (F+O+B+J+Y)
-                        print("Z pressed: Enabling all rotating rods features automatically...")
+                        print("Z: Enabling all features (F+O+B+J+Y)...")
                         
                         # 1. Enable agent-following mode (F key)
                         if not follow_agent_mode:
                             follow_agent_mode = True
-                            print("  ✓ Agent-following mode: ON")
+                            print("✓ Agent-following: ON")
                             # Initialize agent position tracking
                             agent_last_position = (agent.state[0], agent.state[1])
                             # Find closest node to current agent position
@@ -670,47 +680,56 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                             agent_following_node_index = find_closest_node(map_graph.nodes, agent_pos)
                             if agent_following_node_index is not None and visibility_map:
                                 selected_node_index = agent_following_node_index
-                                print(f"    Following agent at node {selected_node_index}")
+                                print(f"  Following at node {selected_node_index}")
                         else:
-                            print("  ✓ Agent-following mode: Already ON")
+                            print("✓ Agent-following: Already ON")
                         
                         # 2. Enable probability overlay (O key)
                         if not show_probability_overlay:
                             show_probability_overlay = True
-                            print("  ✓ Probability overlay: ON")
+                            print("✓ Probability overlay: ON")
                         else:
-                            print("  ✓ Probability overlay: Already ON")
+                            print("✓ Probability overlay: Already ON")
                         
                         # 3. Enable visibility gaps display (B key)
                         if not show_visibility_gaps:
                             show_visibility_gaps = True
-                            print("  ✓ Visibility gaps: ON")
+                            print("✓ Visibility gaps: ON")
                         else:
-                            print("  ✓ Visibility gaps: Already ON")
+                            print("✓ Visibility gaps: Already ON")
                             
                         # 4. Enable second agent probability overlay (J key)
                         if not show_agent2_probability_overlay:
                             show_agent2_probability_overlay = True
                             # Turn off visibility gaps for agent 2
                             show_agent2_visibility_gaps = False
-                            print("  ✓ Second agent probability overlay: ON")
+                            # Enable agent 2's rotating rods
+                            show_agent2_rods = True
+                            print("✓ Agent 2 probability: ON")
+                            print("✓ Agent 2 rods: ON")
                         else:
-                            print("  ✓ Second agent probability overlay: Already ON")
+                            print("✓ Agent 2 probability: Already ON")
+                            # Make sure agent 2's rods are on
+                            if not show_agent2_rods:
+                                show_agent2_rods = True
+                                print("✓ Agent 2 rods: ON")
+                            else:
+                                print("✓ Agent 2 rods: Already ON")
                         
-                        # 4. Enable rotating rods display (Y key)
+                        # 5. Enable rotating rods display (Y key)
                         if not show_rotating_rods:
                             show_rotating_rods = True
-                            print("  ✓ Rotating rods: ON")
+                            print("✓ Rotating rods: ON")
                         else:
-                            print("  ✓ Rotating rods: Already ON")
+                            print("✓ Rotating rods: Already ON")
                         
                         # Check for prerequisites and warn if any are missing
                         if not visibility_map:
-                            print("  ⚠ Warning: No visibility data available. Press V to analyze or L to load.")
+                            print("⚠ Warning: No visibility data. Press V to analyze or L to load.")
                         elif selected_node_index is None or selected_node_index not in visibility_map:
-                            print("  ⚠ Warning: No valid node selected. Move agent or click on a node.")
+                            print("⚠ Warning: No valid node selected. Move agent or click on a node.")
                         else:
-                            print("  ✓ All features enabled successfully! Rotating rods system is ready.")
+                            print("✓ All features enabled successfully! System ready.")
                         
                         print("Complete rotating rods system activated. Use arrow keys to move and observe the enhanced visualization.")
                     elif event.key == pygame.K_PLUS or event.key == pygame.K_EQUALS:
@@ -1097,29 +1116,24 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 "N: Next node (visibility mode)",
                 "P: Previous node (visibility mode)",
                 "F: Toggle agent-following mode",
-                f"O: Toggle probability overlay {'(ON)' if show_probability_overlay else '(OFF)'} - requires visibility data",
-                f"B: Toggle 1st agent visibility gaps {'(ON)' if show_visibility_gaps else '(OFF)'} - requires visibility data",
-                f"J: Toggle 2nd agent probability {'(ON)' if show_agent2_probability_overlay else '(OFF)'} - equal probability for visible nodes",
-                f"K: Toggle 2nd agent visibility {'(ON)' if show_agent2_visibility_gaps else '(OFF)'} - includes camera range (800px)",
-                f"Y: Toggle rotating rods {'(ON)' if show_rotating_rods else '(OFF)'} - requires probability overlay & visibility",
+                f"O: Toggle prob overlay {'(ON)' if show_probability_overlay else '(OFF)'} - needs visibility",
+                f"B: Toggle 1st agent gaps {'(ON)' if show_visibility_gaps else '(OFF)'} - blue/violet",
+                f"J: 2nd agent prob {'(ON)' if show_agent2_probability_overlay else '(OFF)'} - rods {'(ON)' if show_agent2_rods else ''}, 800px circle",
+                f"K: 2nd agent visibility {'(ON)' if show_agent2_visibility_gaps else '(OFF)'} - cyan/green, 800px",
+                f"Y: Rotating rods {'(ON)' if show_rotating_rods else '(OFF)'} - shows gap arcs",
             ]
             
             # Add time horizon info when probability overlay is enabled
             if show_probability_overlay:
                 max_reachable_distance = time_horizon * LEADER_LINEAR_VEL
                 info_text.extend([
-                    f"Time horizon: {time_horizon:.1f}s (range: {max_reachable_distance:.0f}px)",
-                    "+/-: Adjust time horizon"
+                    f"Time: {time_horizon:.1f}s (range: {max_reachable_distance:.0f}px) | +/-: Adjust"
                 ])
             
             info_text.extend([
-                "Mouse: Left-click to select start point",
-                "       Right-click to find paths from agent",
-                "       - Yellow path: Graph-based shortest path",
-                "       - Cyan dashed path: Dynamically feasible path",
-                "T: Toggle path visibility",
-                "C: Clear current path",
-                "ESC: Exit"
+                "Mouse: Left-click to select | Right-click for paths",
+                "T: Toggle path | C: Clear path | ESC: Exit",
+                "Yellow path: Graph-based | Cyan: Dynamically feasible"
             ])
             
             # Add cache info
@@ -2137,6 +2151,133 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     circle_size = max(2, min(5, int(gap_size / 30)))
                     pygame.draw.circle(screen, base_color, start_point, circle_size)
                     pygame.draw.circle(screen, base_color, end_point, circle_size)
+                    
+                    # ROTATING RODS VISUALIZATION FOR AGENT 2: Show swept areas and rotation indicators
+                    # Can be enabled either globally via Y key (show_rotating_rods) or individually via J key (show_agent2_rods)
+                    if (show_rotating_rods or show_agent2_rods) and visibility_map:
+                        # Only process significant gaps
+                        if gap_size < 50:
+                            continue
+                        
+                        # Determine near point (pivot point) and far point
+                        if start_dist < end_dist:
+                            near_point = start_point
+                            far_point = end_point
+                            is_cyan_gap = True  # Near-to-far (expanding)
+                        else:
+                            near_point = end_point
+                            far_point = start_point
+                            is_cyan_gap = False  # Far-to-near (contracting)
+                        
+                        # Calculate initial rod angle (along the gap line from near to far point)
+                        initial_rod_angle = math.atan2(far_point[1] - near_point[1], far_point[0] - near_point[0])
+                        
+                        # Calculate rod length based on the gap size
+                        original_gap_rod_length = math.dist(near_point, far_point)
+                        rod_length = max(20, original_gap_rod_length)
+                        
+                        max_rotation = math.pi / 4  # Maximum 45 degrees rotation
+                        
+                        # Determine rotation direction based on gap color
+                        if is_cyan_gap:
+                            rotation_direction = -1  # Anticlockwise (counterclockwise)
+                            gap_color = (0, 200, 255)  # Cyan tone
+                        else:
+                            rotation_direction = 1   # Clockwise
+                            gap_color = (0, 240, 180)  # Green-cyan tone
+                        
+                        # Rod pivots at near point, rotates in one direction only
+                        rod_base = near_point
+                        
+                        # Calculate the swept arc range
+                        sweep_start_angle = initial_rod_angle
+                        sweep_end_angle = initial_rod_angle + max_rotation * rotation_direction
+                        
+                        # Draw rod base indicator (pivot point)
+                        pygame.draw.circle(screen, (0, 255, 255), rod_base, 8)
+                        pygame.draw.circle(screen, (0, 180, 180), rod_base, 4)
+                        
+                        # Draw initial rod position (gap line)
+                        initial_rod_end = (
+                            rod_base[0] + rod_length * math.cos(initial_rod_angle),
+                            rod_base[1] + rod_length * math.sin(initial_rod_angle)
+                        )
+                        pygame.draw.line(screen, gap_color, rod_base, initial_rod_end, 3)
+                        
+                        # Draw the swept area
+                        sweep_surface = pygame.Surface((screen.get_width(), screen.get_height()), pygame.SRCALPHA)
+                        
+                        # Use gap color for swept area with transparency
+                        sweep_color = (*gap_color, 60)
+                        
+                        # Draw the swept arc area as a polygon
+                        arc_points = [rod_base]
+                        num_arc_points = 20
+                        for i in range(num_arc_points + 1):
+                            t = i / num_arc_points
+                            angle = sweep_start_angle + t * (sweep_end_angle - sweep_start_angle)
+                            point = (
+                                rod_base[0] + rod_length * math.cos(angle),
+                                rod_base[1] + rod_length * math.sin(angle)
+                            )
+                            arc_points.append(point)
+                        
+                        pygame.draw.polygon(sweep_surface, sweep_color, arc_points)
+                        screen.blit(sweep_surface, (0, 0))
+                        
+                        # Draw the boundary lines of the swept area
+                        boundary_color = gap_color
+                        start_boundary = (
+                            rod_base[0] + rod_length * math.cos(sweep_start_angle),
+                            rod_base[1] + rod_length * math.sin(sweep_start_angle)
+                        )
+                        end_boundary = (
+                            rod_base[0] + rod_length * math.cos(sweep_end_angle),
+                            rod_base[1] + rod_length * math.sin(sweep_end_angle)
+                        )
+                        pygame.draw.line(screen, boundary_color, rod_base, start_boundary, 2)
+                        pygame.draw.line(screen, boundary_color, rod_base, end_boundary, 2)
+                        
+                        # Draw rotation direction indicator
+                        indicator_radius = 25
+                        indicator_start_angle = initial_rod_angle + (math.pi/8) * rotation_direction * 0.3
+                        indicator_end_angle = initial_rod_angle + (math.pi/6) * rotation_direction
+                        
+                        # Draw curved arrow showing rotation direction
+                        arrow_color = (200, 255, 255)  # Light cyan for agent 2
+                        num_arrow_segments = 6
+                        for i in range(num_arrow_segments):
+                            t1 = i / num_arrow_segments
+                            t2 = (i + 1) / num_arrow_segments
+                            angle1 = indicator_start_angle + t1 * (indicator_end_angle - indicator_start_angle)
+                            angle2 = indicator_start_angle + t2 * (indicator_end_angle - indicator_start_angle)
+                            
+                            point1 = (
+                                rod_base[0] + indicator_radius * math.cos(angle1),
+                                rod_base[1] + indicator_radius * math.sin(angle1)
+                            )
+                            point2 = (
+                                rod_base[0] + indicator_radius * math.cos(angle2),
+                                rod_base[1] + indicator_radius * math.sin(angle2)
+                            )
+                            pygame.draw.line(screen, arrow_color, point1, point2, 3)
+                        
+                        # Draw arrow head
+                        arrow_head_size = 8
+                        arrow_tip = (
+                            rod_base[0] + indicator_radius * math.cos(indicator_end_angle),
+                            rod_base[1] + indicator_radius * math.sin(indicator_end_angle)
+                        )
+                        arrow_head1 = (
+                            arrow_tip[0] - arrow_head_size * math.cos(indicator_end_angle + 2.8),
+                            arrow_tip[1] - arrow_head_size * math.sin(indicator_end_angle + 2.8)
+                        )
+                        arrow_head2 = (
+                            arrow_tip[0] - arrow_head_size * math.cos(indicator_end_angle - 2.8),
+                            arrow_tip[1] - arrow_head_size * math.sin(indicator_end_angle - 2.8)
+                        )
+                        pygame.draw.line(screen, arrow_color, arrow_tip, arrow_head1, 3)
+                        pygame.draw.line(screen, arrow_color, arrow_tip, arrow_head2, 3)
                 
                 # Draw individual visibility points (only when probability overlay is OFF)
                 if not show_agent2_probability_overlay:
@@ -2161,15 +2302,26 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     # Get nodes visible from agent 2's position
                     visible_node_indices = set(visibility_map[agent2_closest_node])
                     
-                    # Assign a low, equal probability to all visible nodes
+                    # Assign a low, equal probability to all visible nodes within vision range
+                    # Get agent 2's visibility range from config
+                    agent2_vision_range = DEFAULT_VISION_RANGE  # 800 pixels - typical camera range for escort
+                    
                     for i, node in enumerate(map_graph.nodes):
+                        # Check if node is visible according to visibility map
                         if i in visible_node_indices:
-                            # Set a constant, low probability value for all visible nodes
-                            # No degradation based on distance or direction
-                            final_prob = 0.15  # Low, constant probability value
+                            # Calculate distance from agent 2 to this node
+                            node_pos = map_graph.nodes[i]
+                            dist_to_node = math.dist((agent2_x, agent2_y), node_pos)
                             
-                            if final_prob > 0.01:  # Only store significant probabilities
-                                agent2_node_probabilities[i] = final_prob
+                            # Only assign probability if node is within the visibility range circle
+                            if dist_to_node <= agent2_vision_range:
+                                # Set a constant, low probability value for all visible nodes within range
+                                # No degradation based on distance or direction
+                                final_prob = 0.15  # Low, constant probability value
+                                
+                                if final_prob > 0.01:  # Only store significant probabilities
+                                    agent2_node_probabilities[i] = final_prob
+                            # Nodes outside the circle have 0 probability (default)
                     
                     # Draw the probability distribution for agent 2
                     for node_idx, prob in agent2_node_probabilities.items():
