@@ -122,7 +122,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
     AGENT_LINEAR_VEL = LEADER_LINEAR_VEL
     AGENT_ANGULAR_VEL = LEADER_ANGULAR_VEL
     AGENT_COLOR = (255, 0, 255)  # Bright magenta for maximum visibility (first agent)
-    AGENT2_COLOR = (0, 255, 255)  # Bright cyan for second agent
+    AGENT2_COLOR = (0, 255, 255)  # Bright cyan for agent 2 (contrasting with magenta visibility indicators)
     AGENT_RADIUS = 16
 
     # Initialize font for display
@@ -334,8 +334,9 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
     # Initialize visibility gaps display variable
     show_visibility_gaps = False
     
-    # Initialize visibility gaps display for second agent
+    # Initialize visibility gaps display and probability overlay for second agent
     show_agent2_visibility_gaps = False
+    show_agent2_probability_overlay = False
     
     # Initialize extended probability set (gap arcs) display variable
     show_extended_probability_set = False
@@ -612,11 +613,22 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         else:
                             print("First agent visibility gaps: OFF")
                     elif event.key == pygame.K_j:
+                        # Toggle probability overlay for second agent
+                        show_agent2_probability_overlay = not show_agent2_probability_overlay
+                        if show_agent2_probability_overlay:
+                            print("Second agent probability overlay: ON - Showing visibility-based probability distribution")
+                            # Automatically turn off visibility gaps when enabling probability overlay
+                            show_agent2_visibility_gaps = False
+                        else:
+                            print("Second agent probability overlay: OFF")
+                    elif event.key == pygame.K_k:
                         # Toggle visibility gaps display for second agent
                         show_agent2_visibility_gaps = not show_agent2_visibility_gaps
                         if show_agent2_visibility_gaps:
                             print("Second agent visibility gaps: ON - Showing ray casting discontinuities in cyan lines")
                             print("Second agent visibility range: ON - Showing camera range circle (800 pixels)")
+                            # Automatically turn off probability overlay when enabling visibility gaps
+                            show_agent2_probability_overlay = False
                         else:
                             print("Second agent visibility gaps: OFF")
                             print("Second agent visibility range: OFF")
@@ -644,7 +656,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         else:
                             print("Rotating rods: OFF")
                     elif event.key == pygame.K_z:
-                        # Z key: Auto-enable all rotating rods features (F+O+B+Y)
+                        # Z key: Auto-enable all rotating rods features (F+O+B+J+Y)
                         print("Z pressed: Enabling all rotating rods features automatically...")
                         
                         # 1. Enable agent-following mode (F key)
@@ -675,6 +687,15 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                             print("  ✓ Visibility gaps: ON")
                         else:
                             print("  ✓ Visibility gaps: Already ON")
+                            
+                        # 4. Enable second agent probability overlay (J key)
+                        if not show_agent2_probability_overlay:
+                            show_agent2_probability_overlay = True
+                            # Turn off visibility gaps for agent 2
+                            show_agent2_visibility_gaps = False
+                            print("  ✓ Second agent probability overlay: ON")
+                        else:
+                            print("  ✓ Second agent probability overlay: Already ON")
                         
                         # 4. Enable rotating rods display (Y key)
                         if not show_rotating_rods:
@@ -1078,7 +1099,8 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 "F: Toggle agent-following mode",
                 f"O: Toggle probability overlay {'(ON)' if show_probability_overlay else '(OFF)'} - requires visibility data",
                 f"B: Toggle 1st agent visibility gaps {'(ON)' if show_visibility_gaps else '(OFF)'} - requires visibility data",
-                f"J: Toggle 2nd agent visibility gaps {'(ON)' if show_agent2_visibility_gaps else '(OFF)'} - includes camera range (800px)",
+                f"J: Toggle 2nd agent probability {'(ON)' if show_agent2_probability_overlay else '(OFF)'} - equal probability for visible nodes",
+                f"K: Toggle 2nd agent visibility {'(ON)' if show_agent2_visibility_gaps else '(OFF)'} - includes camera range (800px)",
                 f"Y: Toggle rotating rods {'(ON)' if show_rotating_rods else '(OFF)'} - requires probability overlay & visibility",
             ]
             
@@ -1979,39 +2001,67 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         screen.blit(path_text, (info_x + 10, y_offset))
                         y_offset += 25
 
-            # Draw the first agent (magenta - arrow key controlled)
+            # Get agent positions for later drawing (moved drawing to the end)
             x, y, theta, _ = agent.state
-            pygame.draw.circle(screen, AGENT_COLOR, (int(x), int(y)), AGENT_RADIUS)
-            end_x = x + AGENT_RADIUS * 1.2 * math.cos(theta)
-            end_y = y + AGENT_RADIUS * 1.2 * math.sin(theta)
-            pygame.draw.line(screen, (255,255,255), (x, y), (end_x, end_y), 3)
-            
-            # Add label for first agent
-            label_font = pygame.font.SysFont('Arial', 14, bold=True)
-            label_text = label_font.render("↑", True, (255, 255, 255))
-            label_bg = pygame.Surface((label_text.get_width() + 4, label_text.get_height() + 2))
-            label_bg.fill((100, 0, 100))
-            label_bg.set_alpha(180)
-            screen.blit(label_bg, (int(x) - label_text.get_width()//2 - 2, int(y) - AGENT_RADIUS - 20))
-            screen.blit(label_text, (int(x) - label_text.get_width()//2, int(y) - AGENT_RADIUS - 19))
-            
-            # Draw the second agent (cyan - WASD controlled)
             x2, y2, theta2, _ = agent2.state
-            pygame.draw.circle(screen, AGENT2_COLOR, (int(x2), int(y2)), AGENT_RADIUS)
-            end_x2 = x2 + AGENT_RADIUS * 1.2 * math.cos(theta2)
-            end_y2 = y2 + AGENT_RADIUS * 1.2 * math.sin(theta2)
-            pygame.draw.line(screen, (255,255,255), (x2, y2), (end_x2, end_y2), 3)
             
-            # Add label for second agent
-            label_text2 = label_font.render("W", True, (255, 255, 255))
-            label_bg2 = pygame.Surface((label_text2.get_width() + 4, label_text2.get_height() + 2))
-            label_bg2.fill((0, 100, 100))
-            label_bg2.set_alpha(180)
-            screen.blit(label_bg2, (int(x2) - label_text2.get_width()//2 - 2, int(y2) - AGENT_RADIUS - 20))
-            screen.blit(label_text2, (int(x2) - label_text2.get_width()//2, int(y2) - AGENT_RADIUS - 19))
+            # Store font for agent labels
+            label_font = pygame.font.SysFont('Arial', 14, bold=True)
             
-            # SECOND AGENT VISIBILITY GAPS VISUALIZATION
+            # SECOND AGENT VISUALIZATION OPTIONS
+            # First priority: Show visibility gaps if enabled
             if show_agent2_visibility_gaps:
+                # First, use preprocessed visibility data to show visible map graph nodes
+                if visibility_map and map_graph:
+                    # Find closest node to the second agent's position
+                    agent2_pos = (x2, y2)
+                    agent2_node_index = find_closest_node(map_graph.nodes, agent2_pos)
+                    
+                    if agent2_node_index is not None:
+                        agent2_node = map_graph.nodes[agent2_node_index]
+                        
+                        # Get visible nodes from the visibility map
+                        visible_nodes = visibility_map[agent2_node_index]
+                        
+                        # Group nodes by distance for better visualization (close, medium, far)
+                        agent2_node_distance_groups = {
+                            'close': [],
+                            'medium': [],
+                            'far': []
+                        }
+                        
+                        # Calculate distance thresholds based on visibility range
+                        close_threshold = MAP_GRAPH_VISIBILITY_RANGE * 0.33
+                        medium_threshold = MAP_GRAPH_VISIBILITY_RANGE * 0.66
+                        
+                        # Categorize visible nodes by distance
+                        for visible_index in visible_nodes:
+                            if visible_index < len(map_graph.nodes):  # Safety check
+                                visible_node = map_graph.nodes[visible_index]
+                                node_distance = math.dist(agent2_node, visible_node)
+                                
+                                if node_distance <= close_threshold:
+                                    agent2_node_distance_groups['close'].append(visible_node)
+                                elif node_distance <= medium_threshold:
+                                    agent2_node_distance_groups['medium'].append(visible_node)
+                                else:
+                                    agent2_node_distance_groups['far'].append(visible_node)
+                        
+                        # Draw lines to close nodes (bright cyan to match agent 2's color)
+                        for visible_node in agent2_node_distance_groups['close']:
+                            pygame.draw.line(screen, (0, 255, 255), agent2_node, visible_node, 2)
+                            pygame.draw.circle(screen, (0, 255, 255), visible_node, 5)
+                        
+                        # Draw lines to medium-range nodes (lighter cyan)
+                        for visible_node in agent2_node_distance_groups['medium']:
+                            pygame.draw.line(screen, (100, 255, 255), agent2_node, visible_node, 1)
+                            pygame.draw.circle(screen, (100, 255, 255), visible_node, 4)
+                        
+                        # Draw lines to far nodes (faded cyan)
+                        for visible_node in agent2_node_distance_groups['far']:
+                            pygame.draw.line(screen, (150, 255, 255, 150), agent2_node, visible_node, 1)
+                            pygame.draw.circle(screen, (150, 255, 255), visible_node, 3)
+                
                 # Import vision utilities
                 from multitrack.utils.vision import cast_vision_ray
                 
@@ -2061,7 +2111,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     is_near_to_far = start_dist < end_dist  # Near point first, far point second
                     is_far_to_near = start_dist > end_dist  # Far point first, near point second
                     
-                    # Choose base color based on gap orientation - using cyan tones for second agent
+                    # Choose base color based on gap orientation - using cyan/green for second agent's gaps
                     if is_near_to_far:
                         # Cyan for near-to-far transitions (expanding gaps)
                         base_color = (0, 180, 255) if gap_size > 150 else (0, 200, 255) if gap_size > 80 else (0, 220, 255)
@@ -2087,6 +2137,59 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     circle_size = max(2, min(5, int(gap_size / 30)))
                     pygame.draw.circle(screen, base_color, start_point, circle_size)
                     pygame.draw.circle(screen, base_color, end_point, circle_size)
+                
+                # Draw individual visibility points (only when probability overlay is OFF)
+                if not show_agent2_probability_overlay:
+                    for endpoint in ray_endpoints:
+                        # Use a magenta color for agent 2 visibility points to match the agent color
+                        pygame.draw.circle(screen, (255, 50, 255), endpoint, 1)
+            
+            # Second priority: Show probability overlay for agent 2 if enabled
+            elif show_agent2_probability_overlay:
+                # Draw probability distribution for agent 2 instead of individual points
+                # Similar to agent 1's probability overlay but with cyan colors
+                agent2_x, agent2_y = agent2.state[0], agent2.state[1]
+                agent2_theta = agent2.state[2]  # Agent 2's heading angle
+                
+                # Calculate node visibility and probabilities for agent 2
+                agent2_node_probabilities = {}
+                
+                # Find the closest node to agent 2's position
+                agent2_closest_node = find_closest_node(map_graph.nodes, (agent2_x, agent2_y))
+                
+                if agent2_closest_node is not None and visibility_map and agent2_closest_node in visibility_map:
+                    # Get nodes visible from agent 2's position
+                    visible_node_indices = set(visibility_map[agent2_closest_node])
+                    
+                    # Assign a low, equal probability to all visible nodes
+                    for i, node in enumerate(map_graph.nodes):
+                        if i in visible_node_indices:
+                            # Set a constant, low probability value for all visible nodes
+                            # No degradation based on distance or direction
+                            final_prob = 0.15  # Low, constant probability value
+                            
+                            if final_prob > 0.01:  # Only store significant probabilities
+                                agent2_node_probabilities[i] = final_prob
+                    
+                    # Draw the probability distribution for agent 2
+                    for node_idx, prob in agent2_node_probabilities.items():
+                        node_pos = map_graph.nodes[node_idx]
+                        
+                        # Use fixed size for all nodes (no variation based on probability)
+                        node_size = 5  # Constant size for all visible nodes
+                        
+                        # Use fixed alpha (opacity) for all nodes
+                        alpha = 150  # Constant opacity for all visible nodes
+                        
+                        # Use a consistent cyan color for all nodes (no variation in color)
+                        color_r = 0
+                        color_g = 200  # Fixed green component
+                        color_b = 255  # Fixed blue component
+                        
+                        # Draw the probability node
+                        node_surface = pygame.Surface((node_size*2, node_size*2), pygame.SRCALPHA)
+                        pygame.draw.circle(node_surface, (color_r, color_g, color_b, alpha), (node_size, node_size), node_size)
+                        screen.blit(node_surface, (node_pos[0] - node_size, node_pos[1] - node_size))
             
             # Draw reachability circle LAST (on top of everything) when probability overlay is enabled
             if show_probability_overlay:
@@ -2127,6 +2230,40 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 pygame.draw.circle(escort_circle_surface, (*escort_circle_color, escort_circle_alpha), 
                                   (int(x2), int(y2)), int(escort_visibility_range), 2)
                 screen.blit(escort_circle_surface, (0, 0))
+            
+            # NOW DRAW AGENTS ON TOP OF ALL VISUALIZATION ELEMENTS
+            # This ensures agents are clearly visible above all visibility indicators
+            
+            # Draw the first agent (magenta - arrow key controlled)
+            pygame.draw.circle(screen, AGENT_COLOR, (int(x), int(y)), AGENT_RADIUS)
+            end_x = x + AGENT_RADIUS * 1.2 * math.cos(theta)
+            end_y = y + AGENT_RADIUS * 1.2 * math.sin(theta)
+            pygame.draw.line(screen, (255,255,255), (x, y), (end_x, end_y), 3)
+            
+            # Add label for first agent
+            label_text = label_font.render("↑", True, (255, 255, 255))
+            label_bg = pygame.Surface((label_text.get_width() + 4, label_text.get_height() + 2))
+            label_bg.fill((100, 0, 100))
+            label_bg.set_alpha(180)
+            screen.blit(label_bg, (int(x) - label_text.get_width()//2 - 2, int(y) - AGENT_RADIUS - 20))
+            screen.blit(label_text, (int(x) - label_text.get_width()//2, int(y) - AGENT_RADIUS - 19))
+            
+            # Draw the second agent (cyan - WASD controlled) with enhanced visibility
+            # Draw a larger highlight circle first (bright white/light cyan for contrast)
+            pygame.draw.circle(screen, (200, 255, 255), (int(x2), int(y2)), AGENT_RADIUS + 4)
+            # Draw the actual agent
+            pygame.draw.circle(screen, AGENT2_COLOR, (int(x2), int(y2)), AGENT_RADIUS)
+            end_x2 = x2 + AGENT_RADIUS * 1.2 * math.cos(theta2)
+            end_y2 = y2 + AGENT_RADIUS * 1.2 * math.sin(theta2)
+            pygame.draw.line(screen, (255,255,255), (x2, y2), (end_x2, end_y2), 3)
+            
+            # Add label for second agent with matching background color
+            label_text2 = label_font.render("W", True, (255, 255, 255))
+            label_bg2 = pygame.Surface((label_text2.get_width() + 4, label_text2.get_height() + 2))
+            label_bg2.fill((0, 180, 180))  # Match the cyan color scheme
+            label_bg2.set_alpha(180)
+            screen.blit(label_bg2, (int(x2) - label_text2.get_width()//2 - 2, int(y2) - AGENT_RADIUS - 20))
+            screen.blit(label_text2, (int(x2) - label_text2.get_width()//2, int(y2) - AGENT_RADIUS - 19))
 
             # Update the display
             pygame.display.flip()
