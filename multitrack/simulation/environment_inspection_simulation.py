@@ -334,6 +334,9 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
     # Initialize visibility gaps display variable
     show_visibility_gaps = False
     
+    # Initialize visibility gaps display for second agent
+    show_agent2_visibility_gaps = False
+    
     # Initialize extended probability set (gap arcs) display variable
     show_extended_probability_set = False
     
@@ -602,12 +605,21 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         else:
                             print("Probability overlay: OFF")
                     elif event.key == pygame.K_b:
-                        # Toggle visibility gaps display
+                        # Toggle visibility gaps display for first agent
                         show_visibility_gaps = not show_visibility_gaps
                         if show_visibility_gaps:
-                            print("Visibility gaps: ON - Showing ray casting discontinuities in blue lines")
+                            print("First agent visibility gaps: ON - Showing ray casting discontinuities in blue lines")
                         else:
-                            print("Visibility gaps: OFF")
+                            print("First agent visibility gaps: OFF")
+                    elif event.key == pygame.K_j:
+                        # Toggle visibility gaps display for second agent
+                        show_agent2_visibility_gaps = not show_agent2_visibility_gaps
+                        if show_agent2_visibility_gaps:
+                            print("Second agent visibility gaps: ON - Showing ray casting discontinuities in cyan lines")
+                            print("Second agent visibility range: ON - Showing camera range circle (800 pixels)")
+                        else:
+                            print("Second agent visibility gaps: OFF")
+                            print("Second agent visibility range: OFF")
                     elif event.key == pygame.K_h:
                         # Toggle extended probability set (gap arcs) display
                         show_extended_probability_set = not show_extended_probability_set
@@ -1065,7 +1077,8 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 "P: Previous node (visibility mode)",
                 "F: Toggle agent-following mode",
                 f"O: Toggle probability overlay {'(ON)' if show_probability_overlay else '(OFF)'} - requires visibility data",
-                f"B: Toggle visibility gaps {'(ON)' if show_visibility_gaps else '(OFF)'} - requires visibility data",
+                f"B: Toggle 1st agent visibility gaps {'(ON)' if show_visibility_gaps else '(OFF)'} - requires visibility data",
+                f"J: Toggle 2nd agent visibility gaps {'(ON)' if show_agent2_visibility_gaps else '(OFF)'} - includes camera range (800px)",
                 f"Y: Toggle rotating rods {'(ON)' if show_rotating_rods else '(OFF)'} - requires probability overlay & visibility",
             ]
             
@@ -1649,6 +1662,8 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                                                         dy = node[1] - filled_pos[1]
                                                         dist_sq = dx*dx + dy*dy
                                                         
+
+
                                                         if dist_sq <= interpolation_radius_sq and dist_sq > 0:
                                                             # Weight by inverse distance
                                                             weight = 1.0 / (1.0 + math.sqrt(dist_sq))
@@ -1995,6 +2010,84 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
             screen.blit(label_bg2, (int(x2) - label_text2.get_width()//2 - 2, int(y2) - AGENT_RADIUS - 20))
             screen.blit(label_text2, (int(x2) - label_text2.get_width()//2, int(y2) - AGENT_RADIUS - 19))
             
+            # SECOND AGENT VISIBILITY GAPS VISUALIZATION
+            if show_agent2_visibility_gaps:
+                # Import vision utilities
+                from multitrack.utils.vision import cast_vision_ray
+                
+                # Cast rays in all directions to find visibility discontinuities
+                num_rays = 360  # Every 1 degree for finer resolution
+                angle_step = (2 * math.pi) / num_rays
+                ray_endpoints = []
+                
+                # Cast rays in all directions from the second agent's position
+                for i in range(num_rays):
+                    angle = i * angle_step
+                    endpoint = cast_vision_ray(
+                        x2, 
+                        y2, 
+                        angle, 
+                        MAP_GRAPH_VISIBILITY_RANGE,
+                        environment.get_all_walls(),
+                        environment.get_doors()  # Doors allow vision through
+                    )
+                    ray_endpoints.append(endpoint)
+                
+                # Find discontinuities in ray distances and connect successive rays with abrupt changes
+                min_gap_distance = 30  # Minimum distance difference to consider a gap
+                gap_lines = []
+                
+                for i in range(num_rays):
+                    current_endpoint = ray_endpoints[i]
+                    next_endpoint = ray_endpoints[(i + 1) % num_rays]  # Wrap around
+                    
+                    # Calculate distances from agent position
+                    current_dist = math.dist((x2, y2), current_endpoint)
+                    next_dist = math.dist((x2, y2), next_endpoint)
+                    
+                    # Check for significant distance change (gap) between successive rays
+                    distance_diff = abs(current_dist - next_dist)
+                    if distance_diff > min_gap_distance:
+                        # Record this gap line connecting the two successive ray endpoints
+                        gap_lines.append((current_endpoint, next_endpoint, distance_diff))
+                
+                # Draw all the gap lines with orientation-based coloring
+                for start_point, end_point, gap_size in gap_lines:
+                    # Determine gap orientation relative to clockwise ray casting
+                    start_dist = math.dist((x2, y2), start_point)
+                    end_dist = math.dist((x2, y2), end_point)
+                    
+                    # Classify gap type based on distance progression
+                    is_near_to_far = start_dist < end_dist  # Near point first, far point second
+                    is_far_to_near = start_dist > end_dist  # Far point first, near point second
+                    
+                    # Choose base color based on gap orientation - using cyan tones for second agent
+                    if is_near_to_far:
+                        # Cyan for near-to-far transitions (expanding gaps)
+                        base_color = (0, 180, 255) if gap_size > 150 else (0, 200, 255) if gap_size > 80 else (0, 220, 255)
+                    elif is_far_to_near:
+                        # Green-cyan for far-to-near transitions (contracting gaps)
+                        base_color = (0, 220, 180) if gap_size > 150 else (0, 240, 180) if gap_size > 80 else (0, 255, 180)
+                    else:
+                        # Fallback color for equal distances (rare case)
+                        base_color = (0, 200, 200)
+                    
+                    # Determine line width based on gap size
+                    if gap_size > 150:
+                        line_width = 3
+                    elif gap_size > 80:
+                        line_width = 2
+                    else:
+                        line_width = 1
+                    
+                    # Draw the gap line connecting successive ray endpoints
+                    pygame.draw.line(screen, base_color, start_point, end_point, line_width)
+                    
+                    # Draw small circles at the gap endpoints to highlight them
+                    circle_size = max(2, min(5, int(gap_size / 30)))
+                    pygame.draw.circle(screen, base_color, start_point, circle_size)
+                    pygame.draw.circle(screen, base_color, end_point, circle_size)
+            
             # Draw reachability circle LAST (on top of everything) when probability overlay is enabled
             if show_probability_overlay:
                 max_reachable_distance = time_horizon * LEADER_LINEAR_VEL
@@ -2018,6 +2111,22 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 filled_surface = pygame.Surface((ENVIRONMENT_WIDTH, ENVIRONMENT_HEIGHT), pygame.SRCALPHA)
                 pygame.draw.circle(filled_surface, (*circle_color, filled_alpha), (int(x), int(y)), int(max_reachable_distance))
                 screen.blit(filled_surface, (0, 0))
+            
+            # Draw visibility range circle for the second agent (escort)
+            if show_agent2_visibility_gaps:
+                # Use DEFAULT_VISION_RANGE from config instead of MAP_GRAPH_VISIBILITY_RANGE
+                escort_visibility_range = DEFAULT_VISION_RANGE  # 800 pixels - typical camera range for escort
+                escort_circle_color = (0, 255, 255)  # Bright cyan color for second agent
+                
+                # Create pulsing effect for the second agent's circle
+                escort_pulse_intensity = (math.sin(pygame.time.get_ticks() / 500) + 1) / 2  # Value between 0 and 1
+                
+                # Draw a single clean circle with pulsing effect
+                escort_circle_alpha = int(180 + 75 * escort_pulse_intensity)  # Alpha between 180 and 255
+                escort_circle_surface = pygame.Surface((ENVIRONMENT_WIDTH, ENVIRONMENT_HEIGHT), pygame.SRCALPHA)
+                pygame.draw.circle(escort_circle_surface, (*escort_circle_color, escort_circle_alpha), 
+                                  (int(x2), int(y2)), int(escort_visibility_range), 2)
+                screen.blit(escort_circle_surface, (0, 0))
 
             # Update the display
             pygame.display.flip()
