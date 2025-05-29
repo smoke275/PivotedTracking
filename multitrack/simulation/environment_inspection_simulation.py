@@ -2023,6 +2023,47 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
             label_font = pygame.font.SysFont('Arial', 14, bold=True)
             
             # SECOND AGENT VISUALIZATION OPTIONS
+            # Generate gap lines for both visibility gaps and rotating rods
+            gap_lines = []
+            if show_agent2_visibility_gaps or show_agent2_rods:
+                # Import vision utilities
+                from multitrack.utils.vision import cast_vision_ray
+                
+                # Cast rays in all directions to find visibility discontinuities
+                num_rays = 360  # Every 1 degree for finer resolution
+                angle_step = (2 * math.pi) / num_rays
+                ray_endpoints = []
+                
+                # Cast rays in all directions from the second agent's position
+                for i in range(num_rays):
+                    angle = i * angle_step
+                    endpoint = cast_vision_ray(
+                        x2, 
+                        y2, 
+                        angle, 
+                        MAP_GRAPH_VISIBILITY_RANGE,
+                        environment.get_all_walls(),
+                        environment.get_doors()  # Doors allow vision through
+                    )
+                    ray_endpoints.append(endpoint)
+                
+                # Find discontinuities in ray distances and connect successive rays with abrupt changes
+                min_gap_distance = 30  # Minimum distance difference to consider a gap
+                
+                for i in range(num_rays):
+                    current_endpoint = ray_endpoints[i]
+                    next_endpoint = ray_endpoints[(i + 1) % num_rays]  # Wrap around
+                    
+                    # Calculate distances from agent position
+                    current_dist = math.dist((x2, y2), current_endpoint)
+                    next_dist = math.dist((x2, y2), next_endpoint)
+                    
+                    # Check for significant distance change (gap) between successive rays
+                    distance_diff = abs(current_dist - next_dist)
+                    if distance_diff > min_gap_distance:
+                        # Record this gap line connecting the two successive ray endpoints
+                        gap_lines.append((current_endpoint, next_endpoint, distance_diff))
+            
             # First priority: Show visibility gaps if enabled
             if show_agent2_visibility_gaps:
                 # First, use preprocessed visibility data to show visible map graph nodes
@@ -2076,45 +2117,6 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                             pygame.draw.line(screen, (150, 255, 255, 150), agent2_node, visible_node, 1)
                             pygame.draw.circle(screen, (150, 255, 255), visible_node, 3)
                 
-                # Import vision utilities
-                from multitrack.utils.vision import cast_vision_ray
-                
-                # Cast rays in all directions to find visibility discontinuities
-                num_rays = 360  # Every 1 degree for finer resolution
-                angle_step = (2 * math.pi) / num_rays
-                ray_endpoints = []
-                
-                # Cast rays in all directions from the second agent's position
-                for i in range(num_rays):
-                    angle = i * angle_step
-                    endpoint = cast_vision_ray(
-                        x2, 
-                        y2, 
-                        angle, 
-                        MAP_GRAPH_VISIBILITY_RANGE,
-                        environment.get_all_walls(),
-                        environment.get_doors()  # Doors allow vision through
-                    )
-                    ray_endpoints.append(endpoint)
-                
-                # Find discontinuities in ray distances and connect successive rays with abrupt changes
-                min_gap_distance = 30  # Minimum distance difference to consider a gap
-                gap_lines = []
-                
-                for i in range(num_rays):
-                    current_endpoint = ray_endpoints[i]
-                    next_endpoint = ray_endpoints[(i + 1) % num_rays]  # Wrap around
-                    
-                    # Calculate distances from agent position
-                    current_dist = math.dist((x2, y2), current_endpoint)
-                    next_dist = math.dist((x2, y2), next_endpoint)
-                    
-                    # Check for significant distance change (gap) between successive rays
-                    distance_diff = abs(current_dist - next_dist)
-                    if distance_diff > min_gap_distance:
-                        # Record this gap line connecting the two successive ray endpoints
-                        gap_lines.append((current_endpoint, next_endpoint, distance_diff))
-                
                 # Draw all the gap lines with orientation-based coloring
                 for start_point, end_point, gap_size in gap_lines:
                     # Determine gap orientation relative to clockwise ray casting
@@ -2151,139 +2153,13 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     circle_size = max(2, min(5, int(gap_size / 30)))
                     pygame.draw.circle(screen, base_color, start_point, circle_size)
                     pygame.draw.circle(screen, base_color, end_point, circle_size)
-                    
-                    # ROTATING RODS VISUALIZATION FOR AGENT 2: Show swept areas and rotation indicators
-                    # Can be enabled either globally via Y key (show_rotating_rods) or individually via J key (show_agent2_rods)
-                    if (show_rotating_rods or show_agent2_rods) and visibility_map:
-                        # Only process significant gaps
-                        if gap_size < 50:
-                            continue
-                        
-                        # Determine near point (pivot point) and far point
-                        if start_dist < end_dist:
-                            near_point = start_point
-                            far_point = end_point
-                            is_cyan_gap = True  # Near-to-far (expanding)
-                        else:
-                            near_point = end_point
-                            far_point = start_point
-                            is_cyan_gap = False  # Far-to-near (contracting)
-                        
-                        # Calculate initial rod angle (along the gap line from near to far point)
-                        initial_rod_angle = math.atan2(far_point[1] - near_point[1], far_point[0] - near_point[0])
-                        
-                        # Calculate rod length based on the gap size
-                        original_gap_rod_length = math.dist(near_point, far_point)
-                        rod_length = max(20, original_gap_rod_length)
-                        
-                        max_rotation = math.pi / 4  # Maximum 45 degrees rotation
-                        
-                        # Determine rotation direction based on gap color
-                        if is_cyan_gap:
-                            rotation_direction = -1  # Anticlockwise (counterclockwise)
-                            gap_color = (0, 200, 255)  # Cyan tone
-                        else:
-                            rotation_direction = 1   # Clockwise
-                            gap_color = (0, 240, 180)  # Green-cyan tone
-                        
-                        # Rod pivots at near point, rotates in one direction only
-                        rod_base = near_point
-                        
-                        # Calculate the swept arc range
-                        sweep_start_angle = initial_rod_angle
-                        sweep_end_angle = initial_rod_angle + max_rotation * rotation_direction
-                        
-                        # Draw rod base indicator (pivot point)
-                        pygame.draw.circle(screen, (0, 255, 255), rod_base, 8)
-                        pygame.draw.circle(screen, (0, 180, 180), rod_base, 4)
-                        
-                        # Draw initial rod position (gap line)
-                        initial_rod_end = (
-                            rod_base[0] + rod_length * math.cos(initial_rod_angle),
-                            rod_base[1] + rod_length * math.sin(initial_rod_angle)
-                        )
-                        pygame.draw.line(screen, gap_color, rod_base, initial_rod_end, 3)
-                        
-                        # Draw the swept area
-                        sweep_surface = pygame.Surface((screen.get_width(), screen.get_height()), pygame.SRCALPHA)
-                        
-                        # Use gap color for swept area with transparency
-                        sweep_color = (*gap_color, 60)
-                        
-                        # Draw the swept arc area as a polygon
-                        arc_points = [rod_base]
-                        num_arc_points = 20
-                        for i in range(num_arc_points + 1):
-                            t = i / num_arc_points
-                            angle = sweep_start_angle + t * (sweep_end_angle - sweep_start_angle)
-                            point = (
-                                rod_base[0] + rod_length * math.cos(angle),
-                                rod_base[1] + rod_length * math.sin(angle)
-                            )
-                            arc_points.append(point)
-                        
-                        pygame.draw.polygon(sweep_surface, sweep_color, arc_points)
-                        screen.blit(sweep_surface, (0, 0))
-                        
-                        # Draw the boundary lines of the swept area
-                        boundary_color = gap_color
-                        start_boundary = (
-                            rod_base[0] + rod_length * math.cos(sweep_start_angle),
-                            rod_base[1] + rod_length * math.sin(sweep_start_angle)
-                        )
-                        end_boundary = (
-                            rod_base[0] + rod_length * math.cos(sweep_end_angle),
-                            rod_base[1] + rod_length * math.sin(sweep_end_angle)
-                        )
-                        pygame.draw.line(screen, boundary_color, rod_base, start_boundary, 2)
-                        pygame.draw.line(screen, boundary_color, rod_base, end_boundary, 2)
-                        
-                        # Draw rotation direction indicator
-                        indicator_radius = 25
-                        indicator_start_angle = initial_rod_angle + (math.pi/8) * rotation_direction * 0.3
-                        indicator_end_angle = initial_rod_angle + (math.pi/6) * rotation_direction
-                        
-                        # Draw curved arrow showing rotation direction
-                        arrow_color = (200, 255, 255)  # Light cyan for agent 2
-                        num_arrow_segments = 6
-                        for i in range(num_arrow_segments):
-                            t1 = i / num_arrow_segments
-                            t2 = (i + 1) / num_arrow_segments
-                            angle1 = indicator_start_angle + t1 * (indicator_end_angle - indicator_start_angle)
-                            angle2 = indicator_start_angle + t2 * (indicator_end_angle - indicator_start_angle)
-                            
-                            point1 = (
-                                rod_base[0] + indicator_radius * math.cos(angle1),
-                                rod_base[1] + indicator_radius * math.sin(angle1)
-                            )
-                            point2 = (
-                                rod_base[0] + indicator_radius * math.cos(angle2),
-                                rod_base[1] + indicator_radius * math.sin(angle2)
-                            )
-                            pygame.draw.line(screen, arrow_color, point1, point2, 3)
-                        
-                        # Draw arrow head
-                        arrow_head_size = 8
-                        arrow_tip = (
-                            rod_base[0] + indicator_radius * math.cos(indicator_end_angle),
-                            rod_base[1] + indicator_radius * math.sin(indicator_end_angle)
-                        )
-                        arrow_head1 = (
-                            arrow_tip[0] - arrow_head_size * math.cos(indicator_end_angle + 2.8),
-                            arrow_tip[1] - arrow_head_size * math.sin(indicator_end_angle + 2.8)
-                        )
-                        arrow_head2 = (
-                            arrow_tip[0] - arrow_head_size * math.cos(indicator_end_angle - 2.8),
-                            arrow_tip[1] - arrow_head_size * math.sin(indicator_end_angle - 2.8)
-                        )
-                        pygame.draw.line(screen, arrow_color, arrow_tip, arrow_head1, 3)
-                        pygame.draw.line(screen, arrow_color, arrow_tip, arrow_head2, 3)
                 
                 # Draw individual visibility points (only when probability overlay is OFF)
                 if not show_agent2_probability_overlay:
-                    for endpoint in ray_endpoints:
+                    for start_point, end_point, gap_size in gap_lines:
                         # Use a magenta color for agent 2 visibility points to match the agent color
-                        pygame.draw.circle(screen, (255, 50, 255), endpoint, 1)
+                        pygame.draw.circle(screen, (255, 50, 255), start_point, 1)
+                        pygame.draw.circle(screen, (255, 50, 255), end_point, 1)
             
             # Second priority: Show probability overlay for agent 2 if enabled
             elif show_agent2_probability_overlay:
@@ -2382,6 +2258,138 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 pygame.draw.circle(escort_circle_surface, (*escort_circle_color, escort_circle_alpha), 
                                   (int(x2), int(y2)), int(escort_visibility_range), 2)
                 screen.blit(escort_circle_surface, (0, 0))
+            
+            # ROTATING RODS VISUALIZATION FOR AGENT 2 (Independent section)
+            # Can be enabled either globally via Y key (show_rotating_rods) or individually via J key (show_agent2_rods)
+            if (show_rotating_rods or show_agent2_rods) and visibility_map and gap_lines:
+                for start_point, end_point, gap_size in gap_lines:
+                    # Only process significant gaps
+                    if gap_size < 50:
+                        continue
+                    
+                    # Determine gap orientation relative to clockwise ray casting
+                    start_dist = math.dist((x2, y2), start_point)
+                    end_dist = math.dist((x2, y2), end_point)
+                    
+                    # Determine near point (pivot point) and far point
+                    if start_dist < end_dist:
+                        near_point = start_point
+                        far_point = end_point
+                        is_cyan_gap = True  # Near-to-far (expanding)
+                    else:
+                        near_point = end_point
+                        far_point = start_point
+                        is_cyan_gap = False  # Far-to-near (contracting)
+                    
+                    # Calculate initial rod angle (along the gap line from near to far point)
+                    initial_rod_angle = math.atan2(far_point[1] - near_point[1], far_point[0] - near_point[0])
+                    
+                    # Calculate rod length based on the gap size
+                    original_gap_rod_length = math.dist(near_point, far_point)
+                    rod_length = max(20, original_gap_rod_length)
+                    
+                    max_rotation = math.pi / 4  # Maximum 45 degrees rotation
+                    
+                    # Determine rotation direction based on gap color
+                    if is_cyan_gap:
+                        rotation_direction = -1  # Anticlockwise (counterclockwise)
+                        gap_color = (0, 200, 255)  # Cyan tone
+                    else:
+                        rotation_direction = 1   # Clockwise
+                        gap_color = (0, 240, 180)  # Green-cyan tone
+                    
+                    # Rod pivots at near point, rotates in one direction only
+                    rod_base = near_point
+                    
+                    # Calculate the swept arc range
+                    sweep_start_angle = initial_rod_angle
+                    sweep_end_angle = initial_rod_angle + max_rotation * rotation_direction
+                    
+                    # Draw rod base indicator (pivot point)
+                    pygame.draw.circle(screen, (0, 255, 255), rod_base, 8)
+                    pygame.draw.circle(screen, (0, 180, 180), rod_base, 4)
+                    
+                    # Draw initial rod position (gap line)
+                    initial_rod_end = (
+                        rod_base[0] + rod_length * math.cos(initial_rod_angle),
+                        rod_base[1] + rod_length * math.sin(initial_rod_angle)
+                    )
+                    pygame.draw.line(screen, gap_color, rod_base, initial_rod_end, 3)
+                    
+                    # Draw the swept area
+                    sweep_surface = pygame.Surface((screen.get_width(), screen.get_height()), pygame.SRCALPHA)
+                    
+                    # Use gap color for swept area with transparency
+                    sweep_color = (*gap_color, 60)
+                    
+                    # Draw the swept arc area as a polygon
+                    arc_points = [rod_base]
+                    num_arc_points = 20
+                    for i in range(num_arc_points + 1):
+                        t = i / num_arc_points
+                        angle = sweep_start_angle + t * (sweep_end_angle - sweep_start_angle)
+                        point = (
+                            rod_base[0] + rod_length * math.cos(angle),
+                            rod_base[1] + rod_length * math.sin(angle)
+                        )
+                        arc_points.append(point)
+                    
+                    pygame.draw.polygon(sweep_surface, sweep_color, arc_points)
+                    screen.blit(sweep_surface, (0, 0))
+                    
+                    # Draw the boundary lines of the swept area
+                    boundary_color = gap_color
+                    start_boundary = (
+                        rod_base[0] + rod_length * math.cos(sweep_start_angle),
+                        rod_base[1] + rod_length * math.sin(sweep_start_angle)
+                    )
+                    end_boundary = (
+                        rod_base[0] + rod_length * math.cos(sweep_end_angle),
+                        rod_base[1] + rod_length * math.sin(sweep_end_angle)
+                    )
+                    pygame.draw.line(screen, boundary_color, rod_base, start_boundary, 2)
+                    pygame.draw.line(screen, boundary_color, rod_base, end_boundary, 2)
+                    
+                    # Draw rotation direction indicator
+                    indicator_radius = 25
+                    indicator_start_angle = initial_rod_angle + (math.pi/8) * rotation_direction * 0.3
+                    indicator_end_angle = initial_rod_angle + (math.pi/6) * rotation_direction
+                    
+                    # Draw curved arrow showing rotation direction
+                    arrow_color = (200, 255, 255)  # Light cyan for agent 2
+                    num_arrow_segments = 6
+                    for i in range(num_arrow_segments):
+                        t1 = i / num_arrow_segments
+                        t2 = (i + 1) / num_arrow_segments
+                        angle1 = indicator_start_angle + t1 * (indicator_end_angle - indicator_start_angle)
+                        angle2 = indicator_start_angle + t2 * (indicator_end_angle - indicator_start_angle)
+                        
+                        point1 = (
+                            rod_base[0] + indicator_radius * math.cos(angle1),
+                            rod_base[1] + indicator_radius * math.sin(angle1)
+                        )
+                        point2 = (
+                            rod_base[0] + indicator_radius * math.cos(angle2),
+                            rod_base[1] + indicator_radius * math.sin(angle2)
+                        )
+                        pygame.draw.line(screen, arrow_color, point1, point2, 3)
+                    
+                    # Draw arrow head
+                    arrow_head_size = 8
+                    arrow_tip = (
+                        rod_base[0] + indicator_radius * math.cos(indicator_end_angle),
+                        rod_base[1] + indicator_radius * math.sin(indicator_end_angle)
+                    )
+                    arrow_head1 = (
+                        arrow_tip[0] - arrow_head_size * math.cos(indicator_end_angle + 2.8),
+                        arrow_tip[1] - arrow_head_size * math.sin(indicator_end_angle + 2.8)
+                    )
+                    arrow_head2 = (
+                        arrow_tip[0] - arrow_head_size * math.cos(indicator_end_angle - 2.8),
+                        arrow_tip[1] - arrow_head_size * math.sin(indicator_end_angle - 2.8)
+                    )
+                    pygame.draw.line(screen, arrow_color, arrow_tip, arrow_head1, 3)
+                    pygame.draw.line(screen, arrow_color, arrow_tip, arrow_head2, 3)
             
             # NOW DRAW AGENTS ON TOP OF ALL VISUALIZATION ELEMENTS
             # This ensures agents are clearly visible above all visibility indicators
