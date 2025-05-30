@@ -91,6 +91,9 @@ MPPI_PREDICTION_COLOR = (255, 100, 100)   # Color for MPPI predictions
 DEFAULT_VISION_RANGE = 800      # Initial vision range in pixels
 VISION_ANGLE = math.pi/2        # 60 degrees field of view
 
+# Agent 2 probability overlay parameters
+AGENT2_BASE_PROBABILITY = 0.1   # Base probability for nodes visible to agent 2 (0.0 to 1.0)
+
 # Secondary Camera parameters
 SECONDARY_CAMERA_MAX_ANGULAR_VEL = 4.0  # Maximum angular velocity (radians/sec)
 SECONDARY_CAMERA_ANGULAR_ACCEL = 1.0   # Angular acceleration (radians/sec²)

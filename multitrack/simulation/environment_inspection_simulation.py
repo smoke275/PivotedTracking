@@ -619,7 +619,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         # Toggle probability overlay for second agent
                         show_agent2_probability_overlay = not show_agent2_probability_overlay
                         if show_agent2_probability_overlay:
-                            print("Agent 2 probability: ON - Uniform prob within 800px circle, zero outside")
+                            print("Agent 2 probability: ON - Visibility-based 800px range")
                             # Automatically turn off visibility gaps when enabling probability overlay
                             show_agent2_visibility_gaps = False
                             # Automatically show rotating rods for agent 2
@@ -641,12 +641,12 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         else:
                             print("Agent 2 visibility: OFF")
                     elif event.key == pygame.K_h:
-                        # Toggle extended probability set (gap arcs) display
+                        # Toggle extended probability set (gap arcs) display for agent 1 only
                         show_extended_probability_set = not show_extended_probability_set
                         if show_extended_probability_set:
-                            print("Extended probability: ON - Showing gap arcs")
+                            print("Extended probability: ON - Showing gap arcs for agent 1")
                         else:
-                            print("Extended probability: OFF")
+                            print("Extended probability: OFF - Showing green visibility lines for agent 1")
                     elif event.key == pygame.K_y:
                         # Toggle rotating rods display
                         show_rotating_rods = not show_rotating_rods
@@ -666,8 +666,8 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         else:
                             print("Rotating rods: OFF")
                     elif event.key == pygame.K_z:
-                        # Z key: Auto-enable all rotating rods features (F+O+B+J+Y)
-                        print("Z: Enabling all features (F+O+B+J+Y)...")
+                        # Z key: Auto-enable agent 1 features (F+O+B+Y) + H (extended probability set)
+                        print("Z: Enabling agent 1 features (F+O+B+Y+H)...")
                         
                         # 1. Enable agent-following mode (F key)
                         if not follow_agent_mode:
@@ -697,31 +697,20 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                             print("✓ Visibility gaps: ON")
                         else:
                             print("✓ Visibility gaps: Already ON")
-                            
-                        # 4. Enable second agent probability overlay (J key)
-                        if not show_agent2_probability_overlay:
-                            show_agent2_probability_overlay = True
-                            # Turn off visibility gaps for agent 2
-                            show_agent2_visibility_gaps = False
-                            # Enable agent 2's rotating rods
-                            show_agent2_rods = True
-                            print("✓ Agent 2 probability: ON")
-                            print("✓ Agent 2 rods: ON")
-                        else:
-                            print("✓ Agent 2 probability: Already ON")
-                            # Make sure agent 2's rods are on
-                            if not show_agent2_rods:
-                                show_agent2_rods = True
-                                print("✓ Agent 2 rods: ON")
-                            else:
-                                print("✓ Agent 2 rods: Already ON")
                         
-                        # 5. Enable rotating rods display (Y key)
+                        # 4. Enable rotating rods display (Y key)
                         if not show_rotating_rods:
                             show_rotating_rods = True
                             print("✓ Rotating rods: ON")
                         else:
                             print("✓ Rotating rods: Already ON")
+                        
+                        # 5. Enable extended probability set (H key)
+                        if not show_extended_probability_set:
+                            show_extended_probability_set = True
+                            print("✓ Extended probability set: ON")
+                        else:
+                            print("✓ Extended probability set: Already ON")
                         
                         # Check for prerequisites and warn if any are missing
                         if not visibility_map:
@@ -729,9 +718,9 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         elif selected_node_index is None or selected_node_index not in visibility_map:
                             print("⚠ Warning: No valid node selected. Move agent or click on a node.")
                         else:
-                            print("✓ All features enabled successfully! System ready.")
+                            print("✓ All agent 1 features enabled successfully! System ready.")
                         
-                        print("Complete rotating rods system activated. Use arrow keys to move and observe the enhanced visualization.")
+                        print("Complete agent 1 system activated. Use arrow keys to move and observe the enhanced visualization.")
                     elif event.key == pygame.K_PLUS or event.key == pygame.K_EQUALS:
                         # Increase time horizon
                         if show_probability_overlay:
@@ -1118,7 +1107,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 "F: Toggle agent-following mode",
                 f"O: Toggle prob overlay {'(ON)' if show_probability_overlay else '(OFF)'} - needs visibility",
                 f"B: Toggle 1st agent gaps {'(ON)' if show_visibility_gaps else '(OFF)'} - blue/violet",
-                f"J: 2nd agent prob {'(ON)' if show_agent2_probability_overlay else '(OFF)'} - rods {'(ON)' if show_agent2_rods else ''}, 800px circle",
+                f"J: 2nd agent prob {'(ON)' if show_agent2_probability_overlay else '(OFF)'} - visibility-based 800px range",
                 f"K: 2nd agent visibility {'(ON)' if show_agent2_visibility_gaps else '(OFF)'} - cyan/green, 800px",
                 f"Y: Rotating rods {'(ON)' if show_rotating_rods else '(OFF)'} - shows gap arcs",
             ]
@@ -2163,61 +2152,78 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
             
             # Second priority: Show probability overlay for agent 2 if enabled
             elif show_agent2_probability_overlay:
-                # Draw probability distribution for agent 2 instead of individual points
-                # Similar to agent 1's probability overlay but with cyan colors
+                # Visibility-based probability propagation for agent 2
                 agent2_x, agent2_y = agent2.state[0], agent2.state[1]
-                agent2_theta = agent2.state[2]  # Agent 2's heading angle
                 
-                # Calculate node visibility and probabilities for agent 2
-                agent2_node_probabilities = {}
+                # Use DEFAULT_VISION_RANGE from config (800px - same as camera visibility range)
+                agent2_vision_range = DEFAULT_VISION_RANGE
                 
-                # Find the closest node to agent 2's position
-                agent2_closest_node = find_closest_node(map_graph.nodes, (agent2_x, agent2_y))
-                
-                if agent2_closest_node is not None and visibility_map and agent2_closest_node in visibility_map:
-                    # Get nodes visible from agent 2's position
-                    visible_node_indices = set(visibility_map[agent2_closest_node])
+                # Get visibility data for agent 2 if available
+                if visibility_map and map_graph:
+                    # Find closest node to agent 2's position
+                    agent2_pos = (agent2_x, agent2_y)
+                    agent2_node_index = find_closest_node(map_graph.nodes, agent2_pos)
                     
-                    # Assign a low, equal probability to all visible nodes within vision range
-                    # Get agent 2's visibility range from config
-                    agent2_vision_range = DEFAULT_VISION_RANGE  # 800 pixels - typical camera range for escort
-                    
-                    for i, node in enumerate(map_graph.nodes):
-                        # Check if node is visible according to visibility map
-                        if i in visible_node_indices:
-                            # Calculate distance from agent 2 to this node
-                            node_pos = map_graph.nodes[i]
-                            dist_to_node = math.dist((agent2_x, agent2_y), node_pos)
+                    if agent2_node_index is not None:
+                        # Get visible nodes from the visibility map
+                        visible_node_indices = set(visibility_map[agent2_node_index])
+                        
+                        # Draw probability for all map graph nodes within range
+                        for i, node in enumerate(map_graph.nodes):
+                            node_x, node_y = node
                             
-                            # Only assign probability if node is within the visibility range circle
+                            # Calculate distance from agent 2 to this node
+                            dist_to_node = math.dist((agent2_x, agent2_y), (node_x, node_y))
+                            
+                            # Only show nodes within the 800px range
                             if dist_to_node <= agent2_vision_range:
-                                # Set a constant, low probability value for all visible nodes within range
-                                # No degradation based on distance or direction
-                                final_prob = 0.15  # Low, constant probability value
-                                
-                                if final_prob > 0.01:  # Only store significant probabilities
-                                    agent2_node_probabilities[i] = final_prob
-                            # Nodes outside the circle have 0 probability (default)
-                    
-                    # Draw the probability distribution for agent 2
-                    for node_idx, prob in agent2_node_probabilities.items():
-                        node_pos = map_graph.nodes[node_idx]
+                                # Check if this node is actually visible to agent 2
+                                if i in visible_node_indices:
+                                    # Node is visible: use configured base probability
+                                    probability = AGENT2_BASE_PROBABILITY
+                                    
+                                    # Scale color intensity based on probability (using pink/magenta hue)
+                                    intensity = int(probability * 255)
+                                    color = (255, max(0, 50), min(255, max(0, 50 + intensity)))  # Pink/magenta that scales with probability
+                                    
+                                    # Scale node size based on probability (similar to agent 1)
+                                    node_size = int(4 + probability * 4)  # Size 4-8 based on probability
+                                    
+                                    # Draw the probability node with scaled visuals
+                                    pygame.draw.circle(screen, color, (node_x, node_y), node_size)
+                                    
+                                    # Add subtle glow effect for high probability nodes (like agent 1)
+                                    if probability > 0.7:
+                                        glow_blue = min(255, 50 + intensity)
+                                        pygame.draw.circle(screen, (255, 50, glow_blue, 100), (node_x, node_y), node_size + 2)
+                                else:
+                                    # Node is within range but not visible: probability = 0 (no visual display)
+                                    pass
+                else:
+                    # Fallback: if no visibility data available, show uniform probability (original behavior)
+                    for i, node in enumerate(map_graph.nodes):
+                        node_x, node_y = node
                         
-                        # Use fixed size for all nodes (no variation based on probability)
-                        node_size = 5  # Constant size for all visible nodes
+                        # Calculate distance from agent 2 to this node
+                        dist_to_node = math.dist((agent2_x, agent2_y), (node_x, node_y))
                         
-                        # Use fixed alpha (opacity) for all nodes
-                        alpha = 150  # Constant opacity for all visible nodes
-                        
-                        # Use a consistent cyan color for all nodes (no variation in color)
-                        color_r = 0
-                        color_g = 200  # Fixed green component
-                        color_b = 255  # Fixed blue component
-                        
-                        # Draw the probability node
-                        node_surface = pygame.Surface((node_size*2, node_size*2), pygame.SRCALPHA)
-                        pygame.draw.circle(node_surface, (color_r, color_g, color_b, alpha), (node_size, node_size), node_size)
-                        screen.blit(node_surface, (node_pos[0] - node_size, node_pos[1] - node_size))
+                        # Simple uniform probability within range (fallback behavior)
+                        if dist_to_node <= agent2_vision_range:
+                            # Use configured base probability for fallback
+                            probability = AGENT2_BASE_PROBABILITY  # Lower probability when no visibility data
+                            
+                            # Scale color intensity based on probability (using pink/magenta hue)
+                            intensity = int(probability * 255)
+                            color = (255, max(0, 50), min(255, max(0, 50 + intensity)))  # Pink/magenta that scales with probability
+                            
+                            # Scale node size based on probability
+                            node_size = int(4 + probability * 4)  # Size 4-8 based on probability
+                            
+                            # Draw the probability node with scaled visuals
+                            pygame.draw.circle(screen, color, (node_x, node_y), node_size)
+                
+                # Draw the visibility range circle for reference
+                pygame.draw.circle(screen, (0, 150, 200), (int(agent2_x), int(agent2_y)), agent2_vision_range, 2)
             
             # Draw reachability circle LAST (on top of everything) when probability overlay is enabled
             if show_probability_overlay:
