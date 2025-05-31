@@ -957,17 +957,10 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
 
             # Draw the environment
             environment.draw(screen, font)
-            if show_map_graph_visuals:
-                # Draw the graph edges first
-                for edge in map_graph.edges:
-                    i, j = edge
-                    start = map_graph.nodes[i]
-                    end = map_graph.nodes[j]
-                    pygame.draw.line(screen, MAP_GRAPH_EDGE_COLOR, start, end, 1)
-                
-                # Calculate node probabilities if probability overlay is enabled
-                node_probabilities = {}
-                if show_probability_overlay and visibility_map and selected_node_index in visibility_map:
+            
+            # Calculate node probabilities if probability overlay is enabled (INDEPENDENT of map graph visuals)
+            node_probabilities = {}
+            if show_probability_overlay and visibility_map and selected_node_index in visibility_map:
                     agent_x, agent_y = agent.state[0], agent.state[1]
                     agent_theta = agent.state[2]  # Agent's heading angle
                     
@@ -1051,6 +1044,15 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                                     
                                     if probability > 0.05:  # Only store significant probabilities
                                         node_probabilities[i] = probability
+            
+            # Draw map graph visuals if enabled
+            if show_map_graph_visuals:
+                # Draw the graph edges first
+                for edge in map_graph.edges:
+                    i, j = edge
+                    start = map_graph.nodes[i]
+                    end = map_graph.nodes[j]
+                    pygame.draw.line(screen, MAP_GRAPH_EDGE_COLOR, start, end, 1)
                 
                 # Draw regular nodes first (probability overlay nodes will be drawn later after visibility)
                 for i, node in enumerate(map_graph.nodes):
@@ -1836,185 +1838,204 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                                                             if final_interpolated_prob > 0.02:  # Slightly lower threshold for interpolated values
                                                                 propagated_probabilities[node_idx] = final_interpolated_prob
                     
-                    # THIRD PASS: Draw MERGED probability overlay nodes (base + extended probabilities)
-                    if show_probability_overlay and node_probabilities:
-                        # Merge base probabilities with extended probabilities from rotating rods
-                        merged_probabilities = {}
-                        
-                        # Start with base reachability probabilities
-                        for node_idx, base_prob in node_probabilities.items():
-                            merged_probabilities[node_idx] = base_prob
-                        
-                        # Add/merge extended probabilities (computed earlier in background)
-                        if 'propagated_probabilities' in locals() and propagated_probabilities:
-                            for node_idx, extended_prob in propagated_probabilities.items():
-                                if node_idx in merged_probabilities:
-                                    # Use maximum of base and extended probability (union of reachable sets)
-                                    merged_probabilities[node_idx] = max(merged_probabilities[node_idx], extended_prob)
-                                else:
-                                    # Add new extended probability locations
-                                    merged_probabilities[node_idx] = extended_prob
-                        
-                        # Draw merged probability overlay nodes
-                        for i, node in enumerate(map_graph.nodes):
-                            if i in merged_probabilities:
-                                probability = merged_probabilities[i]
-                                
-                                # Create probability-based color (red intensity based on probability)
-                                red_intensity = int(probability * 255)
-                                prob_color = (red_intensity, max(0, 100 - red_intensity), max(0, 100 - red_intensity))
-                                
-                                # Draw larger node with probability color
-                                node_size = int(4 + probability * 4)  # Size 4-8 based on probability
-                                pygame.draw.circle(screen, prob_color, node, node_size)
-                                
-                                # Add subtle glow effect for high probability nodes
-                                if probability > 0.7:
-                                    pygame.draw.circle(screen, (red_intensity, 50, 50, 100), node, node_size + 2)
-                    
-                    # FOURTH PASS: Mouse hover effects and selected node highlight
-                    mouse_x, mouse_y = pygame.mouse.get_pos()
-                    for i, node in enumerate(map_graph.nodes):
-                        distance = ((node[0] - mouse_x) ** 2 + (node[1] - mouse_y) ** 2) ** 0.5
-                        if distance < 15:  # Mouse hover highlight
-                            pygame.draw.circle(screen, (255, 165, 0), node, 6)  # Orange highlight for hover
-                    
-                    # Always draw the selected node with a different color and larger size (on top of everything)
-                    # Add pulsing effect to selected node
-                    pulse = (math.sin(pygame.time.get_ticks() / 300) + 1) / 4 + 0.75  # Value between 0.75 and 1.25
-                    
-                    # Draw outer glow/halo
-                    glow_size = int(12 * pulse)
-                    pygame.draw.circle(screen, (255, 255, 100, 100), selected_node, glow_size)
-                    
-                    # Draw the selected node itself
-                    pygame.draw.circle(screen, (255, 255, 0), selected_node, 8)
-                    pygame.draw.circle(screen, (255, 200, 0), selected_node, 4)
-                    
                     # Draw selection information with enhanced details
-                    visibility_info = [
-                        f"Selected Node: {selected_node_index}",
-                        f"Position: ({int(selected_node[0])}, {int(selected_node[1])})"
-                    ]
-                    
-                    # Add visibility info if available
-                    if visibility_map and selected_node_index in visibility_map:
-                        visible_nodes = visibility_map[selected_node_index]
-                        visible_count = len(visible_nodes)
-                        visibility_percentage = (visible_count / len(map_graph.nodes)) * 100 if map_graph.nodes else 0
-                        
-                        # Count nodes by distance category
-                        close_count = len(node_distance_groups['close'])
-                        medium_count = len(node_distance_groups['medium'])
-                        far_count = len(node_distance_groups['far'])
-                        
-                        visibility_info.extend([
-                            f"Visible Nodes: {visible_count:,} ({visibility_percentage:.1f}% of map)",
-                            f"Distance Groups:",
-                            f"  Close: {close_count} nodes (≤{int(close_threshold)}px)",
-                            f"  Medium: {medium_count} nodes (≤{int(medium_threshold)}px)",
-                            f"  Far: {far_count} nodes (≤{MAP_GRAPH_VISIBILITY_RANGE}px)",
-                            f"Visibility Range: {MAP_GRAPH_VISIBILITY_RANGE} pixels"
-                        ])
-                    else:
-                        visibility_info.extend([
-                            "No visibility data available",
-                            "Press V to analyze visibility",
-                            "Press L to load cached data"
-                        ])
-                    
-                    visibility_info.append("Click on nodes or use N/P to navigate")
-                    
-                    # Create background for visibility info
-                    info_width = 350
-                    info_bg = pygame.Surface((info_width, len(visibility_info) * 25 + 10))
-                    info_bg.fill((0, 0, 30))  # Dark blue background
-                    info_bg.set_alpha(200)
-                    
-                    # Position at top left
-                    info_x = 10
-                    info_y = 10
-                    
-                    # Draw background with rounded corners effect
-                    screen.blit(info_bg, (info_x, info_y))
-                    
-                    # Add a title bar effect
-                    pygame.draw.rect(screen, (0, 100, 200), (info_x, info_y, info_width, 30))
-                    pygame.draw.rect(screen, (0, 70, 150), (info_x, info_y, info_width, 30), 1)
-                    
-                    # Draw a thin border around the entire info panel
-                    pygame.draw.rect(screen, (100, 100, 200), (info_x, info_y, info_width, len(visibility_info) * 25 + 10), 1)
-                    
-                    # Render each line of text with appropriate styling
-                    title_font = pygame.font.SysFont('Arial', 22, bold=True)
-                    regular_font = pygame.font.SysFont('Arial', 20)
-                    small_font = pygame.font.SysFont('Arial', 18)
-                    
-                    # Draw title
-                    title_text = title_font.render("Node Visibility Analysis", True, (255, 255, 255))
-                    screen.blit(title_text, (info_x + (info_width - title_text.get_width()) // 2, info_y + 5))
-                    
-                    # Draw content with different colors based on type
-                    y_offset = info_y + 35
-                    
-                    for i, text in enumerate(visibility_info):
-                        # Skip the first item (handled as title)
+                    # (This has been moved outside the map graph visuals block)
 
-                        if i == 0:
-                            # Draw node ID with highlighted color
-                            node_text = regular_font.render(text, True, (255, 255, 100))
-                            screen.blit(node_text, (info_x + 10, y_offset))
-                            y_offset += 25
-                        elif "Position:" in text:
-                            # Position info
-                            pos_text = regular_font.render(text, True, (200, 200, 255))
-                            screen.blit(pos_text, (info_x + 10, y_offset))
-                            y_offset += 25
-                        elif "Visible Nodes:" in text:
-                            # Visibility count (important info in bright color)
-                            vis_text = regular_font.render(text, True, (50, 255, 50))
-                            screen.blit(vis_text, (info_x + 10, y_offset))
-                            y_offset += 25
-                        elif "Distance Groups:" in text:
-                            # Section header
-                            header_text = regular_font.render(text, True, (255, 200, 100))
-                            screen.blit(header_text, (info_x + 10, y_offset))
-                            y_offset += 25
-                        elif text.startswith("  Close:"):
-                            # Close distance nodes (bright green)
-                            close_text = small_font.render(text, True, (50, 255, 50))
-                            screen.blit(close_text, (info_x + 10, y_offset))
-                            y_offset += 20
-                        elif text.startswith("  Medium:"):
-                            # Medium distance nodes (yellow-green)
-                            medium_text = small_font.render(text, True, (150, 255, 30))
-                            screen.blit(medium_text, (info_x + 10, y_offset))
-                            y_offset += 20
-                        elif text.startswith("  Far:"):
-                            # Far distance nodes (faded green)
-                            far_text = small_font.render(text, True, (100, 180, 30))
-                            screen.blit(far_text, (info_x + 10, y_offset))
-                            y_offset += 20
-                        elif "No visibility data" in text:
-                            # Warning message
-                            warning_text = regular_font.render(text, True, (255, 100, 100))
-                            screen.blit(warning_text, (info_x + 10, y_offset))
-                            y_offset += 25
-                        elif "Press V" in text or "Press L" in text:
-                            # Instruction text
-                            instruction_text = small_font.render(text, True, (200, 200, 200))
-                            screen.blit(instruction_text, (info_x + 20, y_offset))
-                            y_offset += 20
-                        elif "Click on nodes" in text:
-                            # Help text at the bottom
-                            help_text = small_font.render(text, True, (180, 180, 220))
-                            screen.blit(help_text, (info_x + 10, y_offset + 5))
-                            y_offset += 25
+            # Draw probability overlay nodes (INDEPENDENT of map graph visuals)
+            if show_probability_overlay and node_probabilities:
+                # Merge base probabilities with extended probabilities from rotating rods
+                merged_probabilities = {}
+                
+                # Start with base reachability probabilities
+                for node_idx, base_prob in node_probabilities.items():
+                    merged_probabilities[node_idx] = base_prob
+                
+                # Add/merge extended probabilities (computed earlier in background)
+                if 'propagated_probabilities' in locals() and propagated_probabilities:
+                    for node_idx, extended_prob in propagated_probabilities.items():
+                        if node_idx in merged_probabilities:
+                            # Use maximum of base and extended probability (union of reachable sets)
+                            merged_probabilities[node_idx] = max(merged_probabilities[node_idx], extended_prob)
                         else:
-                            # Default styling
-                            default_text = regular_font.render(text, True, (200, 200, 255))
-                            screen.blit(default_text, (info_x + 10, y_offset))
-                            y_offset += 25
+                            # Add new extended probability locations
+                            merged_probabilities[node_idx] = extended_prob
+                
+                # Draw merged probability overlay nodes
+                for i, node in enumerate(map_graph.nodes):
+                    if i in merged_probabilities:
+                        probability = merged_probabilities[i]
+                        
+                        # Create probability-based color (red intensity based on probability)
+                        red_intensity = int(probability * 255)
+                        prob_color = (red_intensity, max(0, 100 - red_intensity), max(0, 100 - red_intensity))
+                        
+                        # Draw larger node with probability color
+                        node_size = int(4 + probability * 4)  # Size 4-8 based on probability
+                        pygame.draw.circle(screen, prob_color, node, node_size)
+                        
+                        # Add subtle glow effect for high probability nodes
+                        if probability > 0.7:
+                            pygame.draw.circle(screen, (red_intensity, 50, 50, 100), node, node_size + 2)
+
+            # Draw mouse hover effects and selected node highlight (INDEPENDENT of map graph visuals)
+            if map_graph and map_graph.nodes:
+                mouse_x, mouse_y = pygame.mouse.get_pos()
+                for i, node in enumerate(map_graph.nodes):
+                    distance = ((node[0] - mouse_x) ** 2 + (node[1] - mouse_y) ** 2) ** 0.5
+                    if distance < 15:  # Mouse hover highlight
+                        pygame.draw.circle(screen, (255, 165, 0), node, 6)  # Orange highlight for hover
+                
+                # Always draw the selected node with a different color and larger size (on top of everything)
+                # Add pulsing effect to selected node
+                pulse = (math.sin(pygame.time.get_ticks() / 300) + 1) / 4 + 0.75  # Value between 0.75 and 1.25
+                
+                # Draw outer glow/halo
+                glow_size = int(12 * pulse)
+                pygame.draw.circle(screen, (255, 255, 100, 100), selected_node, glow_size)
+                
+                # Draw the selected node itself
+                pygame.draw.circle(screen, (255, 255, 0), selected_node, 8)
+                pygame.draw.circle(screen, (255, 200, 0), selected_node, 4)
+                
+                # Draw selection information with enhanced details (INDEPENDENT of map graph visuals)
+                visibility_info = [
+                    f"Selected Node: {selected_node_index}",
+                    f"Position: ({int(selected_node[0])}, {int(selected_node[1])})"
+                ]
+                
+                # Add visibility info if available
+                if visibility_map and selected_node_index in visibility_map:
+                    visible_nodes = visibility_map[selected_node_index]
+                    visible_count = len(visible_nodes)
+                    visibility_percentage = (visible_count / len(map_graph.nodes)) * 100 if map_graph.nodes else 0
+                    
+                    # Count nodes by distance category (need to recalculate here)
+                    close_threshold = MAP_GRAPH_VISIBILITY_RANGE * 0.3
+                    medium_threshold = MAP_GRAPH_VISIBILITY_RANGE * 0.6
+                    
+                    node_distance_groups = {'close': [], 'medium': [], 'far': []}
+                    
+                    for node_idx in visible_nodes:
+                        if node_idx < len(map_graph.nodes):
+                            node = map_graph.nodes[node_idx]
+                            distance = math.sqrt((node[0] - selected_node[0])**2 + (node[1] - selected_node[1])**2)
+                            
+                            if distance <= close_threshold:
+                                node_distance_groups['close'].append(node_idx)
+                            elif distance <= medium_threshold:
+                                node_distance_groups['medium'].append(node_idx)
+                            else:
+                                node_distance_groups['far'].append(node_idx)
+                    
+                    close_count = len(node_distance_groups['close'])
+                    medium_count = len(node_distance_groups['medium'])
+                    far_count = len(node_distance_groups['far'])
+                    
+                    visibility_info.extend([
+                        f"Visible Nodes: {visible_count:,} ({visibility_percentage:.1f}% of map)",
+                        f"Distance Groups:",
+                        f"  Close: {close_count} nodes (≤{int(close_threshold)}px)",
+                        f"  Medium: {medium_count} nodes (≤{int(medium_threshold)}px)",
+                        f"  Far: {far_count} nodes (≤{MAP_GRAPH_VISIBILITY_RANGE}px)",
+                        f"Visibility Range: {MAP_GRAPH_VISIBILITY_RANGE} pixels"
+                    ])
+                else:
+                    visibility_info.extend([
+                        "No visibility data available",
+                        "Press V to analyze visibility",
+                        "Press L to load cached data"
+                    ])
+                
+                visibility_info.append("Click on nodes or use N/P to navigate")
+                
+                # Create background for visibility info
+                info_width = 350
+                info_bg = pygame.Surface((info_width, len(visibility_info) * 25 + 10))
+                info_bg.fill((0, 0, 30))  # Dark blue background
+                info_bg.set_alpha(200)
+                
+                # Position at top left
+                info_x = 10
+                info_y = 10
+                
+                # Draw background with rounded corners effect
+                screen.blit(info_bg, (info_x, info_y))
+                
+                # Add a title bar effect
+                pygame.draw.rect(screen, (0, 100, 200), (info_x, info_y, info_width, 30))
+                pygame.draw.rect(screen, (0, 70, 150), (info_x, info_y, info_width, 30), 1)
+                
+                # Draw a thin border around the entire info panel
+                pygame.draw.rect(screen, (100, 100, 200), (info_x, info_y, info_width, len(visibility_info) * 25 + 10), 1)
+                
+                # Render each line of text with appropriate styling
+                title_font = pygame.font.SysFont('Arial', 22, bold=True)
+                regular_font = pygame.font.SysFont('Arial', 20)
+                small_font = pygame.font.SysFont('Arial', 18)
+                
+                # Draw title
+                title_text = title_font.render("Node Visibility Analysis", True, (255, 255, 255))
+                screen.blit(title_text, (info_x + (info_width - title_text.get_width()) // 2, info_y + 5))
+                
+                # Draw content with different colors based on type
+                y_offset = info_y + 35
+                
+                for i, text in enumerate(visibility_info):
+                    if i == 0:
+                        # Draw node ID with highlighted color
+                        node_text = regular_font.render(text, True, (255, 255, 100))
+                        screen.blit(node_text, (info_x + 10, y_offset))
+                        y_offset += 25
+                    elif "Position:" in text:
+                        # Position info
+                        pos_text = regular_font.render(text, True, (200, 200, 255))
+                        screen.blit(pos_text, (info_x + 10, y_offset))
+                        y_offset += 25
+                    elif "Visible Nodes:" in text:
+                        # Visibility count (important info in bright color)
+                        vis_text = regular_font.render(text, True, (50, 255, 50))
+                        screen.blit(vis_text, (info_x + 10, y_offset))
+                        y_offset += 25
+                    elif "Distance Groups:" in text:
+                        # Section header
+                        header_text = regular_font.render(text, True, (255, 200, 100))
+                        screen.blit(header_text, (info_x + 10, y_offset))
+                        y_offset += 25
+                    elif text.startswith("  Close:"):
+                        # Close distance nodes (bright green)
+                        close_text = small_font.render(text, True, (50, 255, 50))
+                        screen.blit(close_text, (info_x + 10, y_offset))
+                        y_offset += 20
+                    elif text.startswith("  Medium:"):
+                        # Medium distance nodes (yellow-green)
+                        medium_text = small_font.render(text, True, (150, 255, 30))
+                        screen.blit(medium_text, (info_x + 10, y_offset))
+                        y_offset += 20
+                    elif text.startswith("  Far:"):
+                        # Far distance nodes (faded green)
+                        far_text = small_font.render(text, True, (100, 180, 30))
+                        screen.blit(far_text, (info_x + 10, y_offset))
+                        y_offset += 20
+                    elif "No visibility data" in text:
+                        # Warning message
+                        warning_text = regular_font.render(text, True, (255, 100, 100))
+                        screen.blit(warning_text, (info_x + 10, y_offset))
+                        y_offset += 25
+                    elif "Press V" in text or "Press L" in text:
+                        # Instruction text
+                        instruction_text = small_font.render(text, True, (200, 200, 200))
+                        screen.blit(instruction_text, (info_x + 20, y_offset))
+                        y_offset += 20
+                    elif "Click on nodes" in text:
+                        # Help text at the bottom
+                        help_text = small_font.render(text, True, (180, 180, 220))
+                        screen.blit(help_text, (info_x + 10, y_offset + 5))
+                        y_offset += 25
+                    else:
+                        # Default styling
+                        default_text = regular_font.render(text, True, (200, 200, 255))
+                        screen.blit(default_text, (info_x + 10, y_offset))
+                        y_offset += 25
 
             # Draw path if one exists and should be shown
             if show_path and current_path:
