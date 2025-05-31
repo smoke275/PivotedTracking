@@ -381,7 +381,8 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
             map_graph.save_to_cache()
 
     running = True
-    show_map_graph = True  # Start with map graph visible
+    map_graph_enabled = True  # Map graph functionality always enabled
+    show_map_graph_visuals = True  # Start with map graph visuals visible
     
     # Handle automatic loading and analysis of visibility data if requested
     if load_visibility:
@@ -448,10 +449,10 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     if event.key == pygame.K_ESCAPE:
                         running = False
                     elif event.key == pygame.K_g:
-                        # Toggle map graph display
-                        show_map_graph = not show_map_graph
-                        print(f"Map graph display: {'On' if show_map_graph else 'Off'}")
-                    elif event.key == pygame.K_r and show_map_graph:
+                        # Toggle map graph visual display (functionality remains enabled)
+                        show_map_graph_visuals = not show_map_graph_visuals
+                        print(f"Map graph visuals: {'On' if show_map_graph_visuals else 'Off'}")
+                    elif event.key == pygame.K_r and map_graph_enabled:
                         # Regenerate map graph
                         print("Regenerating map graph...")
                         # Create new map graph with the current configuration parameters
@@ -736,7 +737,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         else:
                             print("Enable probability overlay (O) to adjust time horizon")
                 elif event.type == pygame.MOUSEBUTTONDOWN:
-                    if event.button == 1 and show_map_graph:  # Left mouse button
+                    if event.button == 1 and map_graph_enabled:  # Left mouse button
                         # Get mouse position
                         mouse_x, mouse_y = pygame.mouse.get_pos()
                         
@@ -808,7 +809,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                                 print("Press V to analyze visibility or L to load cached data.")
                         else:
                             print("No node found near the click position")
-                    elif event.button == 3 and show_map_graph:  # Right mouse button
+                    elif event.button == 3 and map_graph_enabled:  # Right mouse button
                         # Get mouse position
                         mouse_x, mouse_y = pygame.mouse.get_pos()
                         
@@ -956,7 +957,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
 
             # Draw the environment
             environment.draw(screen, font)
-            if show_map_graph:
+            if show_map_graph_visuals:
                 # Draw the graph edges first
                 for edge in map_graph.edges:
                     i, j = edge
@@ -1152,7 +1153,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 screen.blit(text_surface, (ENVIRONMENT_WIDTH + 20, 20 + i * 25))
 
             # Draw visibility data if selected node and visibility map exist
-            if show_map_graph and selected_node_index is not None:
+            if map_graph_enabled and selected_node_index is not None:
                 if selected_node_index < len(map_graph.nodes):
                     # Get selected node's position
                     selected_node = map_graph.nodes[selected_node_index]
