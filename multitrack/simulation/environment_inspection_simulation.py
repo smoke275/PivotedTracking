@@ -2448,9 +2448,19 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                                   (int(x2), int(y2)), int(escort_visibility_range), 2)
                 screen.blit(escort_circle_surface, (0, 0))
             
-            # ROTATING RODS VISUALIZATION FOR AGENT 2 (Independent section)
+            # ANIMATED ROTATING RODS VISUALIZATION FOR AGENT 2 (Independent section)
             # Can be enabled either globally via Y key (show_rotating_rods) or individually via J key (show_agent2_rods)
             if (show_rotating_rods or show_agent2_rods) and visibility_map and gap_lines:
+                # Animation timing parameters
+                current_time = pygame.time.get_ticks()
+                animation_period = 4000  # Total period for back-and-forth animation (milliseconds)
+                animation_speed = 2 * math.pi / animation_period  # Radians per millisecond
+                
+                # Calculate animation phase (0 to 1 and back, creating back-and-forth motion)
+                animation_phase = (current_time * animation_speed) % (2 * math.pi)
+                # Use sine wave for smooth back-and-forth motion: 0 to 1 and back to 0
+                animation_progress = (math.sin(animation_phase) + 1) / 2  # 0 to 1 range
+                
                 for start_point, end_point, gap_size in gap_lines:
                     # Only process significant gaps
                     if gap_size < 50:
@@ -2487,29 +2497,31 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         rotation_direction = 1   # Clockwise
                         gap_color = (0, 240, 180)  # Green-cyan tone
                     
-                    # Rod pivots at near point, rotates in one direction only
+                    # Rod pivots at near point
                     rod_base = near_point
                     
-                    # Calculate the swept arc range
-                    sweep_start_angle = initial_rod_angle
-                    sweep_end_angle = initial_rod_angle + max_rotation * rotation_direction
+                    # Calculate animated rod angle
+                    # Rod starts at the gap line (initial_rod_angle) and rotates to max angle
+                    current_rotation_offset = max_rotation * rotation_direction * animation_progress
+                    current_rod_angle = initial_rod_angle + current_rotation_offset
+                    
+                    # Calculate current rod end position
+                    current_rod_end = (
+                        rod_base[0] + rod_length * math.cos(current_rod_angle),
+                        rod_base[1] + rod_length * math.sin(current_rod_angle)
+                    )
                     
                     # Draw rod base indicator (pivot point)
                     pygame.draw.circle(screen, (0, 255, 255), rod_base, 8)
                     pygame.draw.circle(screen, (0, 180, 180), rod_base, 4)
                     
-                    # Draw initial rod position (gap line)
-                    initial_rod_end = (
-                        rod_base[0] + rod_length * math.cos(initial_rod_angle),
-                        rod_base[1] + rod_length * math.sin(initial_rod_angle)
-                    )
-                    pygame.draw.line(screen, gap_color, rod_base, initial_rod_end, 3)
-                    
-                    # Draw the swept area
+                    # Draw the swept area (still showing full range)
                     sweep_surface = pygame.Surface((screen.get_width(), screen.get_height()), pygame.SRCALPHA)
+                    sweep_start_angle = initial_rod_angle
+                    sweep_end_angle = initial_rod_angle + max_rotation * rotation_direction
                     
                     # Use gap color for swept area with transparency
-                    sweep_color = (*gap_color, 60)
+                    sweep_color = (*gap_color, 40)  # More transparent for background
                     
                     # Draw the swept arc area as a polygon
                     arc_points = [rod_base]
@@ -2526,8 +2538,8 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     pygame.draw.polygon(sweep_surface, sweep_color, arc_points)
                     screen.blit(sweep_surface, (0, 0))
                     
-                    # Draw the boundary lines of the swept area
-                    boundary_color = gap_color
+                    # Draw the boundary lines of the swept area (faded)
+                    boundary_color = (gap_color[0]//2, gap_color[1]//2, gap_color[2]//2)
                     start_boundary = (
                         rod_base[0] + rod_length * math.cos(sweep_start_angle),
                         rod_base[1] + rod_length * math.sin(sweep_start_angle)
@@ -2536,17 +2548,67 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         rod_base[0] + rod_length * math.cos(sweep_end_angle),
                         rod_base[1] + rod_length * math.sin(sweep_end_angle)
                     )
-                    pygame.draw.line(screen, boundary_color, rod_base, start_boundary, 2)
-                    pygame.draw.line(screen, boundary_color, rod_base, end_boundary, 2)
+                    pygame.draw.line(screen, boundary_color, rod_base, start_boundary, 1)
+                    pygame.draw.line(screen, boundary_color, rod_base, end_boundary, 1)
                     
-                    # Draw rotation direction indicator
-                    indicator_radius = 25
-                    indicator_start_angle = initial_rod_angle + (math.pi/8) * rotation_direction * 0.3
-                    indicator_end_angle = initial_rod_angle + (math.pi/6) * rotation_direction
+                    # Draw the animated rod (brighter and thicker)
+                    pygame.draw.line(screen, gap_color, rod_base, current_rod_end, 4)
+                    
+                    # NARROW BAR HIGHLIGHTING: Highlight map graph nodes immediately under the rotating rod
+                    bar_width = 5  # Ultra-narrow bar width (pixels)
+                    highlight_color = (255, 255, 0, 180)  # Bright yellow with transparency
+                    
+                    if map_graph and map_graph.nodes:
+                        # Create a surface for the highlighting bar
+                        highlight_surface = pygame.Surface((screen.get_width(), screen.get_height()), pygame.SRCALPHA)
+                        
+                        # Check each map graph node to see if it's under the current rod position
+                        for i, node in enumerate(map_graph.nodes):
+                            node_x, node_y = node
+                            
+                            # Calculate distance from node to the rod line (point to line distance)
+                            # Rod line goes from rod_base to current_rod_end
+                            rod_x1, rod_y1 = rod_base
+                            rod_x2, rod_y2 = current_rod_end
+                            
+                            # Vector from rod start to rod end
+                            rod_dx = rod_x2 - rod_x1
+                            rod_dy = rod_y2 - rod_y1
+                            rod_length_sq = rod_dx * rod_dx + rod_dy * rod_dy
+                            
+                            if rod_length_sq > 0:
+                                # Vector from rod start to node
+                                node_dx = node_x - rod_x1
+                                node_dy = node_y - rod_y1
+                                
+                                # Project node onto rod line
+                                t = max(0, min(1, (node_dx * rod_dx + node_dy * rod_dy) / rod_length_sq))
+                                
+                                # Closest point on rod line to the node
+                                closest_x = rod_x1 + t * rod_dx
+                                closest_y = rod_y1 + t * rod_dy
+                                
+                                # Distance from node to rod line
+                                distance_to_rod = math.sqrt((node_x - closest_x)**2 + (node_y - closest_y)**2)
+                                
+                                # If node is within the narrow bar width, highlight it
+                                if distance_to_rod <= bar_width:
+                                    # Draw highlighted circle for this node (smaller for precision)
+                                    pygame.draw.circle(highlight_surface, highlight_color, (int(node_x), int(node_y)), 5)
+                                    # Draw a bright border (thinner)
+                                    pygame.draw.circle(highlight_surface, (255, 255, 255, 220), (int(node_x), int(node_y)), 5, 1)
+                        
+                        # Blit the highlight surface
+                        screen.blit(highlight_surface, (0, 0))
+                    
+                    # Draw rotation direction indicator (smaller and more subtle)
+                    indicator_radius = 20
+                    indicator_start_angle = initial_rod_angle + (math.pi/12) * rotation_direction * 0.5
+                    indicator_end_angle = initial_rod_angle + (math.pi/8) * rotation_direction
                     
                     # Draw curved arrow showing rotation direction
-                    arrow_color = (200, 255, 255)  # Light cyan for agent 2
-                    num_arrow_segments = 6
+                    arrow_color = (150, 200, 200)  # Dimmer arrow for less distraction
+                    num_arrow_segments = 4
                     for i in range(num_arrow_segments):
                         t1 = i / num_arrow_segments
                         t2 = (i + 1) / num_arrow_segments
@@ -2561,10 +2623,10 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                             rod_base[0] + indicator_radius * math.cos(angle2),
                             rod_base[1] + indicator_radius * math.sin(angle2)
                         )
-                        pygame.draw.line(screen, arrow_color, point1, point2, 3)
+                        pygame.draw.line(screen, arrow_color, point1, point2, 2)
                     
                     # Draw arrow head
-                    arrow_head_size = 8
+                    arrow_head_size = 6
                     arrow_tip = (
                         rod_base[0] + indicator_radius * math.cos(indicator_end_angle),
                         rod_base[1] + indicator_radius * math.sin(indicator_end_angle)
@@ -2577,8 +2639,8 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         arrow_tip[0] - arrow_head_size * math.cos(indicator_end_angle - 2.8),
                         arrow_tip[1] - arrow_head_size * math.sin(indicator_end_angle - 2.8)
                     )
-                    pygame.draw.line(screen, arrow_color, arrow_tip, arrow_head1, 3)
-                    pygame.draw.line(screen, arrow_color, arrow_tip, arrow_head2, 3)
+                    pygame.draw.line(screen, arrow_color, arrow_tip, arrow_head1, 2)
+                    pygame.draw.line(screen, arrow_color, arrow_tip, arrow_head2, 2)
             
             # NOW DRAW AGENTS ON TOP OF ALL VISUALIZATION ELEMENTS
             # This ensures agents are clearly visible above all visibility indicators
