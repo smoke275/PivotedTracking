@@ -620,7 +620,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         # Toggle probability overlay for second agent
                         show_agent2_probability_overlay = not show_agent2_probability_overlay
                         if show_agent2_probability_overlay:
-                            print("Agent 2 probability: ON - Visibility-based 800px range")
+                            print("Agent 2 probability: ON - Pink-green blend, visibility-based 800px range")
                             # Automatically turn off visibility gaps when enabling probability overlay
                             show_agent2_visibility_gaps = False
                             # Automatically show rotating rods for agent 2
@@ -1108,9 +1108,9 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 "N: Next node (visibility mode)",
                 "P: Previous node (visibility mode)",
                 "F: Toggle agent-following mode",
-                f"O: Toggle prob overlay {'(ON)' if show_probability_overlay else '(OFF)'} - needs visibility",
+                f"O: Toggle prob overlay {'(ON)' if show_probability_overlay else '(OFF)'} - needs visibility, light blue-red blend",
                 f"B: Toggle 1st agent gaps {'(ON)' if show_visibility_gaps else '(OFF)'} - blue/violet",
-                f"J: 2nd agent prob {'(ON)' if show_agent2_probability_overlay else '(OFF)'} - visibility-based 800px range",
+                f"J: 2nd agent prob {'(ON)' if show_agent2_probability_overlay else '(OFF)'} - visibility-based 800px range, pink-green blend",
                 f"K: 2nd agent visibility {'(ON)' if show_agent2_visibility_gaps else '(OFF)'} - cyan/green, 800px",
                 f"Y: Rotating rods {'(ON)' if show_rotating_rods else '(OFF)'} - shows gap arcs",
             ]
@@ -1865,17 +1865,34 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     if i in merged_probabilities:
                         probability = merged_probabilities[i]
                         
-                        # Create probability-based color (red intensity based on probability)
-                        red_intensity = int(probability * 255)
-                        prob_color = (red_intensity, max(0, 100 - red_intensity), max(0, 100 - red_intensity))
+                        # Color blending scheme for Agent 1: probability determines mix between light blue and red
+                        # Low probability (e.g., 0.1): mostly light blue (0.9) + little red (0.1)
+                        # High probability (e.g., 0.9): mostly red (0.9) + little light blue (0.1)
                         
-                        # Draw larger node with probability color
+                        # Define base colors for light blue-red blending
+                        light_blue_color = (173, 216, 230)  # Light blue for low probability
+                        red_color = (255, 0, 0)    # Pure red for high probability
+                        
+                        # Use probability directly for color blending (0.0 to 1.0)
+                        red_weight = probability  # How much red (high probability)
+                        light_blue_weight = 1.0 - probability  # How much light blue (low probability)
+                        
+                        # Blend the colors
+                        red = int(light_blue_color[0] * light_blue_weight + red_color[0] * red_weight)
+                        green = int(light_blue_color[1] * light_blue_weight + red_color[1] * red_weight)
+                        blue = int(light_blue_color[2] * light_blue_weight + red_color[2] * red_weight)
+                        
+                        color = (red, green, blue)
+                        
+                        # Keep original circle sizes (4-8 pixels based on probability)
                         node_size = int(4 + probability * 4)  # Size 4-8 based on probability
-                        pygame.draw.circle(screen, prob_color, node, node_size)
+                        pygame.draw.circle(screen, color, node, node_size)
                         
                         # Add subtle glow effect for high probability nodes
                         if probability > 0.7:
-                            pygame.draw.circle(screen, (red_intensity, 50, 50, 100), node, node_size + 2)
+                            # Glow uses red tint for high probability
+                            glow_color = (255, 0, 0)  # Red glow
+                            pygame.draw.circle(screen, glow_color, node, node_size + 2)
 
             # Draw mouse hover effects and selected node highlight (INDEPENDENT of map graph visuals)
             if map_graph and map_graph.nodes:
@@ -2306,6 +2323,9 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 # Use DEFAULT_VISION_RANGE from config (800px - same as camera visibility range)
                 agent2_vision_range = DEFAULT_VISION_RANGE
                 
+                # Initialize agent 2 probability list/dictionary (similar to agent 1)
+                agent2_node_probabilities = {}
+                
                 # Get visibility data for agent 2 if available
                 if visibility_map and map_graph:
                     # Find closest node to agent 2's position
@@ -2316,37 +2336,21 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         # Get visible nodes from the visibility map
                         visible_node_indices = set(visibility_map[agent2_node_index])
                         
-                        # Draw probability for all map graph nodes within range
+                        # Calculate and store probabilities for all map graph nodes within range
                         for i, node in enumerate(map_graph.nodes):
                             node_x, node_y = node
                             
                             # Calculate distance from agent 2 to this node
                             dist_to_node = math.dist((agent2_x, agent2_y), (node_x, node_y))
                             
-                            # Only show nodes within the 800px range
+                            # Only process nodes within the 800px range
                             if dist_to_node <= agent2_vision_range:
                                 # Check if this node is actually visible to agent 2
                                 if i in visible_node_indices:
-                                    # Node is visible: use configured base probability
-                                    probability = AGENT2_BASE_PROBABILITY
-                                    
-                                    # Scale color intensity based on probability (using pink/magenta hue)
-                                    intensity = int(probability * 255)
-                                    color = (255, max(0, 50), min(255, max(0, 50 + intensity)))  # Pink/magenta that scales with probability
-                                    
-                                    # Scale node size based on probability (similar to agent 1)
-                                    node_size = int(4 + probability * 4)  # Size 4-8 based on probability
-                                    
-                                    # Draw the probability node with scaled visuals
-                                    pygame.draw.circle(screen, color, (node_x, node_y), node_size)
-                                    
-                                    # Add subtle glow effect for high probability nodes (like agent 1)
-                                    if probability > 0.7:
-                                        glow_blue = min(255, 50 + intensity)
-                                        pygame.draw.circle(screen, (255, 50, glow_blue, 100), (node_x, node_y), node_size + 2)
-                                else:
-                                    # Node is within range but not visible: probability = 0 (no visual display)
-                                    pass
+                                    # Node is visible: use fixed base probability (only store if > 0)
+                                    if AGENT2_BASE_PROBABILITY > 0:
+                                        agent2_node_probabilities[i] = AGENT2_BASE_PROBABILITY
+                                # Note: nodes not visible or with 0 probability are not stored (optimization)
                 else:
                     # Fallback: if no visibility data available, show uniform probability (original behavior)
                     for i, node in enumerate(map_graph.nodes):
@@ -2357,21 +2361,52 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         
                         # Simple uniform probability within range (fallback behavior)
                         if dist_to_node <= agent2_vision_range:
-                            # Use configured base probability for fallback
-                            probability = AGENT2_BASE_PROBABILITY  # Lower probability when no visibility data
-                            
-                            # Scale color intensity based on probability (using pink/magenta hue)
-                            intensity = int(probability * 255)
-                            color = (255, max(0, 50), min(255, max(0, 50 + intensity)))  # Pink/magenta that scales with probability
-                            
-                            # Scale node size based on probability
-                            node_size = int(4 + probability * 4)  # Size 4-8 based on probability
-                            
-                            # Draw the probability node with scaled visuals
-                            pygame.draw.circle(screen, color, (node_x, node_y), node_size)
+                            # Use configured base probability for fallback (only store if > 0)
+                            if AGENT2_BASE_PROBABILITY > 0:
+                                agent2_node_probabilities[i] = AGENT2_BASE_PROBABILITY
                 
-                # Draw the visibility range circle for reference
-                pygame.draw.circle(screen, (0, 150, 200), (int(agent2_x), int(agent2_y)), agent2_vision_range, 2)
+                # Draw the agent 2 probability nodes from the stored probabilities
+                for i, probability in agent2_node_probabilities.items():
+                    # All stored probabilities are > 0 by design (optimization)
+                    node_x, node_y = map_graph.nodes[i]
+                    
+                    # Color blending scheme: probability determines mix between pink and green
+                    # Low probability (e.g., 0.1): mostly pink (0.9) + little green (0.1)
+                    # High probability (e.g., 0.9): mostly green (0.9) + little pink (0.1)
+                    
+                    # Define base colors
+                    pink_color = (255, 105, 180)  # Hot pink
+                    green_color = (0, 255, 100)   # Bright green
+                    
+                    # Use probability directly for color blending (0.0 to 1.0)
+                    green_weight = probability  # How much green
+                    pink_weight = 1.0 - probability  # How much pink
+                    
+                    # Blend the colors
+                    red = int(pink_color[0] * pink_weight + green_color[0] * green_weight)
+                    green = int(pink_color[1] * pink_weight + green_color[1] * green_weight)
+                    blue = int(pink_color[2] * pink_weight + green_color[2] * green_weight)
+                    
+                    color = (red, green, blue)
+                    
+                    # Make circles smaller (reduced from 3-8 to 2-4)
+                    min_size, max_size = 2, 4
+                    node_size = int(min_size + probability * (max_size - min_size))
+                    
+                    # Draw the probability node with smaller circles
+                    pygame.draw.circle(screen, color, (node_x, node_y), node_size)
+                    
+                    # Add subtle glow effect for higher probability nodes (>0.7)
+                    if probability > 0.7:
+                        # Glow uses more green for high probability
+                        glow_color = (0, 255, 150)  # Green-cyan glow
+                        glow_size = node_size + 1  # Smaller glow
+                        
+                        # Draw the glow circle
+                        pygame.draw.circle(screen, glow_color, (node_x, node_y), glow_size)
+                
+                # Draw the visibility range circle for reference (cyan to match the probability nodes)
+                pygame.draw.circle(screen, (0, 200, 200), (int(agent2_x), int(agent2_y)), agent2_vision_range, 2)
             
             # Draw reachability circle LAST (on top of everything) when probability overlay is enabled
             if show_probability_overlay:
