@@ -3,10 +3,22 @@
 Run the environment inspection tool.
 This script launches a visualization of just the environment without any agents.
 
-NOTE: Agent 2 probability generation optimization is planned for this file.
-See agent2_optimization_plan.md for the detailed 6-phase optimization roadmap
-targeting the performance bottlenecks in environment_inspection_simulation.py
-related to Agent 2's visibility-based and gap-based probability calculations.
+🎯 OPTIMIZATION PROJECT ENTRY POINT 🎯
+Agent 2 probability generation optimization is currently in progress.
+
+CURRENT STATUS: Phase 1 Complete → Phase 2 Ready (Spatial Optimization)
+
+📋 OPTIMIZATION DOCUMENTATION:
+- PRIMARY PLAN: agent2_optimization_plan.md (active, concise <100 lines)
+- PHASE 1 RESULTS: PHASE1_COMPLETION_SUMMARY.md (detailed findings)
+- HISTORICAL CONTEXT: agent2_optimization_archive.md (full background)
+- PERFORMANCE DATA: agent2_performance_log.csv (live measurements)
+
+🎯 TARGET: Lines 2649-2860 in environment_inspection_simulation.py
+   Currently: 4.4-4.6s computation per frame → Goal: <16ms (60 FPS)
+
+🔧 TEST PROCEDURE: python inspect_environment.py → Press 'J' → Move with WASD
+   Monitor FPS panel for "Agent 2 computation: X ms" timing
 """
 import os
 import sys

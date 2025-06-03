@@ -9,8 +9,10 @@ import os
 import multiprocessing
 import math
 import time
+import csv
 import numpy as np
 import pickle
+from datetime import datetime
 
 from multitrack.utils.config import *
 from multitrack.models.simulation_environment import SimulationEnvironment
@@ -2387,6 +2389,9 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 
                 # Get visibility data for agent 2 if available
                 if visibility_map and map_graph:
+                    # Start timing visibility-based probability calculation
+                    visibility_calculation_start = time.perf_counter()
+                    
                     # Find closest node to agent 2's position
                     agent2_pos = (agent2_x, agent2_y)
                     agent2_node_index = find_closest_node(map_graph.nodes, agent2_pos)
@@ -2410,8 +2415,15 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                                     if AGENT2_BASE_PROBABILITY > 0:
                                         agent2_node_probabilities[i] = AGENT2_BASE_PROBABILITY
                                 # Note: nodes not visible or with 0 probability are not stored (optimization)
+                    
+                    # End timing visibility calculation
+                    visibility_calculation_end = time.perf_counter()
+                    visibility_calculation_time = visibility_calculation_end - visibility_calculation_start
+                    
                 else:
                     # Fallback: if no visibility data available, show uniform probability (original behavior)
+                    fallback_start = time.perf_counter()
+                    
                     for i, node in enumerate(map_graph.nodes):
                         node_x, node_y = node
                         
@@ -2423,6 +2435,10 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                             # Use configured base probability for fallback (only store if > 0)
                             if AGENT2_BASE_PROBABILITY > 0:
                                 agent2_node_probabilities[i] = AGENT2_BASE_PROBABILITY
+                    
+                    # End timing fallback calculation
+                    fallback_end = time.perf_counter()
+                    visibility_calculation_time = fallback_end - fallback_start
                 
                 # INTEGRATE GAP PROBABILITIES: Visibility-based probabilities override gap-based ones
                 # This happens after visibility calculations but before drawing
@@ -2653,8 +2669,13 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
             # INSTANTANEOUS SWEEP-BASED PROBABILITY ASSIGNMENT FOR AGENT 2 (Independent section)
             # Can be enabled either globally via Y key (show_rotating_rods) or individually via J key (show_agent2_rods)
             if (show_rotating_rods or show_agent2_rods) and visibility_map and gap_lines:
-                # PERFORMANCE TIMING: Start measuring agent 2 computation time
-                agent2_computation_start = pygame.time.get_ticks()
+                # PERFORMANCE TIMING: High-precision timing for Phase 1 optimization
+                agent2_computation_start = time.perf_counter()
+                
+                # Detailed timing breakdown variables
+                visibility_calculation_time = 0.0
+                gap_processing_time = 0.0
+                node_iteration_time = 0.0
                 
                 # Count operations for debugging
                 total_gaps_processed = 0
@@ -2662,13 +2683,21 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 total_nodes_checked = 0
                 total_probabilities_assigned = 0
                 
+                # Track node count for performance analysis
+                node_count = len(map_graph.nodes) if map_graph and map_graph.nodes else 0
+                
                 # INSTANTANEOUS SWEEP: Process all angles at once to assign gap probabilities
                 agent2_gap_probabilities = {}  # Stores gap-based probabilities separate from visibility
+                
+                # Start timing gap processing
+                gap_processing_start = time.perf_counter()
                 
                 for start_point, end_point, gap_size in gap_lines:
                     # Only process significant gaps
                     if gap_size < 50:
                         continue
+                    
+                    total_gaps_processed += 1
                     
                     # Determine gap orientation relative to clockwise ray casting
                     start_dist = math.dist((x2, y2), start_point)
@@ -2732,6 +2761,9 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         # Find all nodes under this rod position
                         bar_width = 15  # Wider sweep for probability assignment
                         
+                        # Start timing node iteration and distance calculations
+                        node_iteration_start = time.perf_counter()
+                        
                         if map_graph and map_graph.nodes:
                             for i, node in enumerate(map_graph.nodes):
                                 total_nodes_checked += 1
@@ -2769,6 +2801,14 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                                             agent2_gap_probabilities[i] = max(agent2_gap_probabilities[i], gap_probability)
                                         else:
                                             agent2_gap_probabilities[i] = gap_probability
+                        
+                        # End timing node iteration
+                        node_iteration_end = time.perf_counter()
+                        node_iteration_time += (node_iteration_end - node_iteration_start)
+                
+                # End timing gap processing
+                gap_processing_end = time.perf_counter()
+                gap_processing_time = gap_processing_end - gap_processing_start
                 
                 # VISUAL REPRESENTATION: Draw static swept areas (no animation)
                 for start_point, end_point, gap_size in gap_lines:
@@ -2857,12 +2897,43 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     # This section just ensures the gap probabilities are calculated and ready
                     pass
                 
-                # PERFORMANCE TIMING: End measuring agent 2 computation time
-                agent2_computation_end = pygame.time.get_ticks()
-                agent2_computation_time = agent2_computation_end - agent2_computation_start
+                # PERFORMANCE TIMING: Complete detailed timing analysis for Phase 1 optimization
+                agent2_computation_end = time.perf_counter()
+                total_computation_time = agent2_computation_end - agent2_computation_start
                 
-                # Store computation time for FPS display (add to info text if enabled)
-                agent2_computation_ms = agent2_computation_time
+                # Convert to milliseconds for consistency with existing display
+                total_time_ms = total_computation_time * 1000
+                visibility_time_ms = visibility_calculation_time * 1000
+                gap_time_ms = gap_processing_time * 1000
+                node_iteration_time_ms = node_iteration_time * 1000
+                
+                # Calculate current FPS
+                current_fps = clock.get_fps()
+                
+                # Log performance data to CSV for Phase 1 analysis
+                performance_log_file = "agent2_performance_log.csv"
+                timestamp = datetime.now().isoformat()
+                
+                # Create CSV header if file doesn't exist
+                write_header = not os.path.exists(performance_log_file)
+                
+                with open(performance_log_file, 'a', newline='') as csvfile:
+                    writer = csv.writer(csvfile)
+                    if write_header:
+                        writer.writerow([
+                            'timestamp', 'total_time_ms', 'visibility_time_ms', 'gap_time_ms', 
+                            'node_iteration_time_ms', 'node_count', 'fps', 'gaps_processed', 
+                            'angles_processed', 'nodes_checked', 'probabilities_assigned'
+                        ])
+                    
+                    writer.writerow([
+                        timestamp, total_time_ms, visibility_time_ms, gap_time_ms,
+                        node_iteration_time_ms, node_count, current_fps, total_gaps_processed,
+                        total_angles_processed, total_nodes_checked, total_probabilities_assigned
+                    ])
+                
+                # Store computation time for FPS display (maintain backward compatibility)
+                agent2_computation_ms = total_time_ms
             
             # NOW DRAW AGENTS ON TOP OF ALL VISUALIZATION ELEMENTS
             # This ensures agents are clearly visible above all visibility indicators
