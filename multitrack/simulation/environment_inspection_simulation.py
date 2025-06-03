@@ -347,6 +347,9 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
     # Initialize rotating rods display variable
     show_rotating_rods = False
     
+    # Initialize combined probability mode (multiply Agent 1 and Agent 2 probabilities)
+    show_combined_probability_mode = False
+    
     # Time horizon parameters for probability overlay
     time_horizon = 4.0  # Look-ahead time in seconds
     min_time_horizon = 0.5  # Minimum time horizon
@@ -722,6 +725,25 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                             print("✓ All agent 1 features enabled successfully! System ready.")
                         
                         print("Complete agent 1 system activated. Use arrow keys to move and observe the enhanced visualization.")
+                    elif event.key == pygame.K_m:
+                        # M key: Toggle combined probability mode (multiply Agent 1 and Agent 2 probabilities)
+                        show_combined_probability_mode = not show_combined_probability_mode
+                        if show_combined_probability_mode:
+                            print("Combined probability mode: ON")
+                            print("  Multiplying Agent 1 and Agent 2 probabilities")
+                            print("  Purple-yellow color scheme: low to high combined probability")
+                            print("  Note: Individual probability overlays will be hidden")
+                            # Auto-enable required modes for both agents
+                            if not show_probability_overlay:
+                                show_probability_overlay = True
+                                print("  Auto-enabled Agent 1 probability overlay")
+                            if not show_agent2_probability_overlay:
+                                show_agent2_probability_overlay = True
+                                show_agent2_rods = True
+                                print("  Auto-enabled Agent 2 probability overlay")
+                        else:
+                            print("Combined probability mode: OFF")
+                            print("  Individual probability overlays restored")
                     elif event.key == pygame.K_PLUS or event.key == pygame.K_EQUALS:
                         # Increase time horizon
                         if show_probability_overlay:
@@ -1842,7 +1864,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     # (This has been moved outside the map graph visuals block)
 
             # Draw probability overlay nodes (INDEPENDENT of map graph visuals)
-            if show_probability_overlay and node_probabilities:
+            if show_probability_overlay and node_probabilities and not show_combined_probability_mode:
                 # Merge base probabilities with extended probabilities from rotating rods
                 merged_probabilities = {}
                 
@@ -2316,7 +2338,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         pygame.draw.circle(screen, (255, 50, 255), end_point, 1)
             
             # Second priority: Show probability overlay for agent 2 if enabled
-            elif show_agent2_probability_overlay:
+            elif show_agent2_probability_overlay and not show_combined_probability_mode:
                 # Visibility-based probability propagation for agent 2
                 agent2_x, agent2_y = agent2.state[0], agent2.state[1]
                 
@@ -2417,8 +2439,142 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 # Draw the visibility range circle for reference (cyan to match the probability nodes)
                 pygame.draw.circle(screen, (0, 200, 200), (int(agent2_x), int(agent2_y)), agent2_vision_range, 2)
             
+            # COMBINED PROBABILITY MODE: Multiply Agent 1 and Agent 2 probabilities
+            elif show_combined_probability_mode:
+                # Calculate combined probabilities for all map graph nodes
+                combined_probabilities = {}
+                
+                # Get Agent 1 probabilities (merged with extended probabilities if available)
+                agent1_probabilities = {}
+                if show_probability_overlay and node_probabilities:
+                    # Start with base reachability probabilities
+                    for node_idx, base_prob in node_probabilities.items():
+                        agent1_probabilities[node_idx] = base_prob
+                    
+                    # Merge with extended probabilities from rotating rods if available
+                    if 'propagated_probabilities' in locals() and propagated_probabilities:
+                        for node_idx, extended_prob in propagated_probabilities.items():
+                            if node_idx in agent1_probabilities:
+                                agent1_probabilities[node_idx] = max(agent1_probabilities[node_idx], extended_prob)
+                            else:
+                                agent1_probabilities[node_idx] = extended_prob
+                
+                # Get Agent 2 probabilities (merged with gap probabilities if available)
+                agent2_probabilities = {}
+                if show_agent2_probability_overlay and map_graph:
+                    # Calculate Agent 2 visibility-based probabilities
+                    agent2_x, agent2_y = agent2.state[0], agent2.state[1]
+                    agent2_vision_range = DEFAULT_VISION_RANGE
+                    
+                    if visibility_map:
+                        agent2_pos = (agent2_x, agent2_y)
+                        agent2_node_index = find_closest_node(map_graph.nodes, agent2_pos)
+                        
+                        if agent2_node_index is not None:
+                            visible_node_indices = set(visibility_map[agent2_node_index])
+                            
+                            for i, node in enumerate(map_graph.nodes):
+                                node_x, node_y = node
+                                dist_to_node = math.dist((agent2_x, agent2_y), (node_x, node_y))
+                                
+                                if dist_to_node <= agent2_vision_range:
+                                    if i in visible_node_indices:
+                                        if AGENT2_BASE_PROBABILITY > 0:
+                                            agent2_probabilities[i] = AGENT2_BASE_PROBABILITY
+                    
+                    # Merge with gap probabilities if available
+                    if 'agent2_gap_probabilities' in locals() and agent2_gap_probabilities:
+                        for node_index, gap_prob in agent2_gap_probabilities.items():
+                            if node_index not in agent2_probabilities:
+                                agent2_probabilities[node_index] = gap_prob
+                
+                # Calculate combined probabilities (multiplication)
+                all_node_indices = set(agent1_probabilities.keys()) | set(agent2_probabilities.keys())
+                
+                for node_idx in all_node_indices:
+                    prob1 = agent1_probabilities.get(node_idx, 0.0)
+                    prob2 = agent2_probabilities.get(node_idx, 0.0)
+                    
+                    # Multiply probabilities (both must exist and be non-zero)
+                    if prob1 > 0 and prob2 > 0:
+                        combined_prob = prob1 * prob2
+                        
+                        # Only store if combined probability is significant (>= 0.1 threshold)
+                        if combined_prob >= 0.1:
+                            combined_probabilities[node_idx] = combined_prob
+                
+                # Draw combined probability nodes with purple-yellow color scheme
+                for node_idx, combined_prob in combined_probabilities.items():
+                    node_x, node_y = map_graph.nodes[node_idx]
+                    
+                    # Purple-yellow color scheme: purple (low) to yellow (high)
+                    # Low probability: dark purple, High probability: bright yellow
+                    purple_color = (128, 0, 128)  # Dark purple
+                    yellow_color = (255, 255, 0)  # Bright yellow
+                    
+                    # Normalize combined probability for color blending (0.0 to 1.0)
+                    # Since we multiply probabilities, the range is typically much smaller
+                    # Use a scaling factor to make the visualization more visible
+                    display_prob = min(1.0, combined_prob * 10)  # Scale up for better visibility
+                    
+                    # Color blending
+                    yellow_weight = display_prob
+                    purple_weight = 1.0 - display_prob
+                    
+                    red = int(purple_color[0] * purple_weight + yellow_color[0] * yellow_weight)
+                    green = int(purple_color[1] * purple_weight + yellow_color[1] * yellow_weight)
+                    blue = int(purple_color[2] * purple_weight + yellow_color[2] * yellow_weight)
+                    
+                    color = (red, green, blue)
+                    
+                    # Node size based on combined probability (larger for higher probability)
+                    min_size, max_size = 3, 7  # Slightly larger than individual modes
+                    node_size = int(min_size + display_prob * (max_size - min_size))
+                    
+                    # Draw the combined probability node
+                    pygame.draw.circle(screen, color, (node_x, node_y), node_size)
+                    
+                    # Add glow effect for very high combined probabilities
+                    if display_prob > 0.8:
+                        glow_color = (255, 255, 150)  # Bright yellow glow
+                        glow_size = node_size + 2
+                        pygame.draw.circle(screen, glow_color, (node_x, node_y), glow_size)
+                
+                # Draw both agents' visibility ranges for reference
+                if map_graph:
+                    # Agent 1 reachability circle (faint blue)
+                    max_reachable_distance = time_horizon * LEADER_LINEAR_VEL
+                    agent1_circle_color = (100, 150, 255)
+                    pygame.draw.circle(screen, agent1_circle_color, (int(x), int(y)), int(max_reachable_distance), 1)
+                    
+                    # Agent 2 visibility circle (faint cyan)
+                    agent2_circle_color = (0, 150, 150)
+                    pygame.draw.circle(screen, agent2_circle_color, (int(agent2_x), int(agent2_y)), DEFAULT_VISION_RANGE, 1)
+                
+                # Display combined mode info
+                info_text = [
+                    "Combined Probability Mode",
+                    f"Agent 1 nodes: {len(agent1_probabilities)}",
+                    f"Agent 2 nodes: {len(agent2_probabilities)}",
+                    f"Combined nodes: {len(combined_probabilities)}",
+                    "Purple → Yellow: Low → High"
+                ]
+                
+                # Create info box
+                info_font = pygame.font.SysFont('Arial', 16)
+                info_bg = pygame.Surface((250, len(info_text) * 20 + 10))
+                info_bg.fill((40, 0, 40))  # Dark purple background
+                info_bg.set_alpha(200)
+                
+                screen.blit(info_bg, (WIDTH - 260, 10))
+                
+                for i, text in enumerate(info_text):
+                    color = (255, 255, 255) if i == 0 else (200, 200, 200)
+                    text_surface = info_font.render(text, True, color)
+                    screen.blit(text_surface, (WIDTH - 250, 20 + i * 20))
+            
             # Draw reachability circle LAST (on top of everything) when probability overlay is enabled
-            if show_probability_overlay:
+            if show_probability_overlay and not show_combined_probability_mode:
                 max_reachable_distance = time_horizon * LEADER_LINEAR_VEL
                 
                 # Create pulsing effect for the circle
