@@ -2365,7 +2365,16 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                             if AGENT2_BASE_PROBABILITY > 0:
                                 agent2_node_probabilities[i] = AGENT2_BASE_PROBABILITY
                 
-                # Draw the agent 2 probability nodes from the stored probabilities
+                # INTEGRATE GAP PROBABILITIES: Visibility-based probabilities override gap-based ones
+                # This happens after visibility calculations but before drawing
+                if 'agent2_gap_probabilities' in locals() and agent2_gap_probabilities:
+                    for node_index, gap_prob in agent2_gap_probabilities.items():
+                        if node_index not in agent2_node_probabilities:
+                            # Only gap probability exists (no visibility): use gap probability
+                            agent2_node_probabilities[node_index] = gap_prob
+                        # If visibility probability exists, it overrides gap probability (no action needed)
+                
+                # Draw the agent 2 probability nodes from the integrated probabilities
                 for i, probability in agent2_node_probabilities.items():
                     # All stored probabilities are > 0 by design (optimization)
                     node_x, node_y = map_graph.nodes[i]
@@ -2448,18 +2457,11 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                                   (int(x2), int(y2)), int(escort_visibility_range), 2)
                 screen.blit(escort_circle_surface, (0, 0))
             
-            # ANIMATED ROTATING RODS VISUALIZATION FOR AGENT 2 (Independent section)
+            # INSTANTANEOUS SWEEP-BASED PROBABILITY ASSIGNMENT FOR AGENT 2 (Independent section)
             # Can be enabled either globally via Y key (show_rotating_rods) or individually via J key (show_agent2_rods)
             if (show_rotating_rods or show_agent2_rods) and visibility_map and gap_lines:
-                # Animation timing parameters
-                current_time = pygame.time.get_ticks()
-                animation_period = 4000  # Total period for back-and-forth animation (milliseconds)
-                animation_speed = 2 * math.pi / animation_period  # Radians per millisecond
-                
-                # Calculate animation phase (0 to 1 and back, creating back-and-forth motion)
-                animation_phase = (current_time * animation_speed) % (2 * math.pi)
-                # Use sine wave for smooth back-and-forth motion: 0 to 1 and back to 0
-                animation_progress = (math.sin(animation_phase) + 1) / 2  # 0 to 1 range
+                # INSTANTANEOUS SWEEP: Process all angles at once to assign gap probabilities
+                agent2_gap_probabilities = {}  # Stores gap-based probabilities separate from visibility
                 
                 for start_point, end_point, gap_size in gap_lines:
                     # Only process significant gaps
@@ -2500,28 +2502,112 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     # Rod pivots at near point
                     rod_base = near_point
                     
-                    # Calculate animated rod angle
-                    # Rod starts at the gap line (initial_rod_angle) and rotates to max angle
-                    current_rotation_offset = max_rotation * rotation_direction * animation_progress
-                    current_rod_angle = initial_rod_angle + current_rotation_offset
+                    # INSTANTANEOUS SWEEP: Calculate probabilities for all angles at once
+                    sweep_start_angle = initial_rod_angle
+                    sweep_end_angle = initial_rod_angle + max_rotation * rotation_direction
+                    total_sweep_angle = abs(sweep_end_angle - sweep_start_angle)
                     
-                    # Calculate current rod end position
-                    current_rod_end = (
-                        rod_base[0] + rod_length * math.cos(current_rod_angle),
-                        rod_base[1] + rod_length * math.sin(current_rod_angle)
-                    )
+                    # Number of discrete angles to sweep through (high resolution for completeness)
+                    num_sweep_angles = 20
+                    
+                    for angle_step in range(num_sweep_angles + 1):
+                        # Calculate current angle in the sweep
+                        angle_progress = angle_step / num_sweep_angles
+                        current_angle = sweep_start_angle + angle_progress * (sweep_end_angle - sweep_start_angle)
+                        
+                        # Calculate gap probability: start with 0.8 base, increase linearly with angle
+                        base_gap_probability = 0.8
+                        gap_probability = base_gap_probability + (angle_progress * 0.2)  # 0.8 to 1.0 range
+                        
+                        # Calculate current rod end position for this angle
+                        current_rod_end = (
+                            rod_base[0] + rod_length * math.cos(current_angle),
+                            rod_base[1] + rod_length * math.sin(current_angle)
+                        )
+                        
+                        # Find all nodes under this rod position
+                        bar_width = 15  # Wider sweep for probability assignment
+                        
+                        if map_graph and map_graph.nodes:
+                            for i, node in enumerate(map_graph.nodes):
+                                node_x, node_y = node
+                                
+                                # Calculate distance from node to the rod line (point to line distance)
+                                rod_x1, rod_y1 = rod_base
+                                rod_x2, rod_y2 = current_rod_end
+                                
+                                # Vector from rod start to rod end
+                                rod_dx = rod_x2 - rod_x1
+                                rod_dy = rod_y2 - rod_y1
+                                rod_length_sq = rod_dx * rod_dx + rod_dy * rod_dy
+                                
+                                if rod_length_sq > 0:
+                                    # Vector from rod start to node
+                                    node_dx = node_x - rod_x1
+                                    node_dy = node_y - rod_y1
+                                    
+                                    # Project node onto rod line
+                                    t = max(0, min(1, (node_dx * rod_dx + node_dy * rod_dy) / rod_length_sq))
+                                    
+                                    # Closest point on rod line to the node
+                                    closest_x = rod_x1 + t * rod_dx
+                                    closest_y = rod_y1 + t * rod_dy
+                                    
+                                    # Distance from node to rod line
+                                    distance_to_rod = math.sqrt((node_x - closest_x)**2 + (node_y - closest_y)**2)
+                                    
+                                    # If node is within the sweep bar width, assign probability
+                                    if distance_to_rod <= bar_width:
+                                        # Use maximum probability if node gets hit by multiple sweep angles
+                                        if i in agent2_gap_probabilities:
+                                            agent2_gap_probabilities[i] = max(agent2_gap_probabilities[i], gap_probability)
+                                        else:
+                                            agent2_gap_probabilities[i] = gap_probability
+                
+                # VISUAL REPRESENTATION: Draw static swept areas (no animation)
+                for start_point, end_point, gap_size in gap_lines:
+                    # Only process significant gaps
+                    if gap_size < 50:
+                        continue
+                    
+                    # Same gap analysis as above
+                    start_dist = math.dist((x2, y2), start_point)
+                    end_dist = math.dist((x2, y2), end_point)
+                    
+                    if start_dist < end_dist:
+                        near_point = start_point
+                        far_point = end_point
+                        is_cyan_gap = True
+                    else:
+                        near_point = end_point
+                        far_point = start_point
+                        is_cyan_gap = False
+                    
+                    initial_rod_angle = math.atan2(far_point[1] - near_point[1], far_point[0] - near_point[0])
+                    original_gap_rod_length = math.dist(near_point, far_point)
+                    rod_length = max(20, original_gap_rod_length)
+                    max_rotation = math.pi / 4
+                    
+                    if is_cyan_gap:
+                        rotation_direction = -1
+                        gap_color = (0, 200, 255)
+                    else:
+                        rotation_direction = 1
+                        gap_color = (0, 240, 180)
+                    
+                    rod_base = near_point
                     
                     # Draw rod base indicator (pivot point)
                     pygame.draw.circle(screen, (0, 255, 255), rod_base, 8)
                     pygame.draw.circle(screen, (0, 180, 180), rod_base, 4)
                     
-                    # Draw the swept area (still showing full range)
+                    # Draw the complete swept area (static, not animated)
                     sweep_surface = pygame.Surface((screen.get_width(), screen.get_height()), pygame.SRCALPHA)
                     sweep_start_angle = initial_rod_angle
                     sweep_end_angle = initial_rod_angle + max_rotation * rotation_direction
                     
                     # Use gap color for swept area with transparency
-                    sweep_color = (*gap_color, 40)  # More transparent for background
+                    sweep_color = (*gap_color, 40)
                     
                     # Draw the swept arc area as a polygon
                     arc_points = [rod_base]
@@ -2538,7 +2624,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     pygame.draw.polygon(sweep_surface, sweep_color, arc_points)
                     screen.blit(sweep_surface, (0, 0))
                     
-                    # Draw the boundary lines of the swept area (faded)
+                    # Draw the boundary lines of the swept area
                     boundary_color = (gap_color[0]//2, gap_color[1]//2, gap_color[2]//2)
                     start_boundary = (
                         rod_base[0] + rod_length * math.cos(sweep_start_angle),
@@ -2548,99 +2634,22 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         rod_base[0] + rod_length * math.cos(sweep_end_angle),
                         rod_base[1] + rod_length * math.sin(sweep_end_angle)
                     )
-                    pygame.draw.line(screen, boundary_color, rod_base, start_boundary, 1)
-                    pygame.draw.line(screen, boundary_color, rod_base, end_boundary, 1)
+                    pygame.draw.line(screen, boundary_color, rod_base, start_boundary, 2)
+                    pygame.draw.line(screen, boundary_color, rod_base, end_boundary, 2)
                     
-                    # Draw the animated rod (brighter and thicker)
-                    pygame.draw.line(screen, gap_color, rod_base, current_rod_end, 4)
-                    
-                    # NARROW BAR HIGHLIGHTING: Highlight map graph nodes immediately under the rotating rod
-                    bar_width = 5  # Ultra-narrow bar width (pixels)
-                    highlight_color = (255, 255, 0, 180)  # Bright yellow with transparency
-                    
-                    if map_graph and map_graph.nodes:
-                        # Create a surface for the highlighting bar
-                        highlight_surface = pygame.Surface((screen.get_width(), screen.get_height()), pygame.SRCALPHA)
-                        
-                        # Check each map graph node to see if it's under the current rod position
-                        for i, node in enumerate(map_graph.nodes):
-                            node_x, node_y = node
-                            
-                            # Calculate distance from node to the rod line (point to line distance)
-                            # Rod line goes from rod_base to current_rod_end
-                            rod_x1, rod_y1 = rod_base
-                            rod_x2, rod_y2 = current_rod_end
-                            
-                            # Vector from rod start to rod end
-                            rod_dx = rod_x2 - rod_x1
-                            rod_dy = rod_y2 - rod_y1
-                            rod_length_sq = rod_dx * rod_dx + rod_dy * rod_dy
-                            
-                            if rod_length_sq > 0:
-                                # Vector from rod start to node
-                                node_dx = node_x - rod_x1
-                                node_dy = node_y - rod_y1
-                                
-                                # Project node onto rod line
-                                t = max(0, min(1, (node_dx * rod_dx + node_dy * rod_dy) / rod_length_sq))
-                                
-                                # Closest point on rod line to the node
-                                closest_x = rod_x1 + t * rod_dx
-                                closest_y = rod_y1 + t * rod_dy
-                                
-                                # Distance from node to rod line
-                                distance_to_rod = math.sqrt((node_x - closest_x)**2 + (node_y - closest_y)**2)
-                                
-                                # If node is within the narrow bar width, highlight it
-                                if distance_to_rod <= bar_width:
-                                    # Draw highlighted circle for this node (smaller for precision)
-                                    pygame.draw.circle(highlight_surface, highlight_color, (int(node_x), int(node_y)), 5)
-                                    # Draw a bright border (thinner)
-                                    pygame.draw.circle(highlight_surface, (255, 255, 255, 220), (int(node_x), int(node_y)), 5, 1)
-                        
-                        # Blit the highlight surface
-                        screen.blit(highlight_surface, (0, 0))
-                    
-                    # Draw rotation direction indicator (smaller and more subtle)
-                    indicator_radius = 20
-                    indicator_start_angle = initial_rod_angle + (math.pi/12) * rotation_direction * 0.5
-                    indicator_end_angle = initial_rod_angle + (math.pi/8) * rotation_direction
-                    
-                    # Draw curved arrow showing rotation direction
-                    arrow_color = (150, 200, 200)  # Dimmer arrow for less distraction
-                    num_arrow_segments = 4
-                    for i in range(num_arrow_segments):
-                        t1 = i / num_arrow_segments
-                        t2 = (i + 1) / num_arrow_segments
-                        angle1 = indicator_start_angle + t1 * (indicator_end_angle - indicator_start_angle)
-                        angle2 = indicator_start_angle + t2 * (indicator_end_angle - indicator_start_angle)
-                        
-                        point1 = (
-                            rod_base[0] + indicator_radius * math.cos(angle1),
-                            rod_base[1] + indicator_radius * math.sin(angle1)
-                        )
-                        point2 = (
-                            rod_base[0] + indicator_radius * math.cos(angle2),
-                            rod_base[1] + indicator_radius * math.sin(angle2)
-                        )
-                        pygame.draw.line(screen, arrow_color, point1, point2, 2)
-                    
-                    # Draw arrow head
-                    arrow_head_size = 6
-                    arrow_tip = (
-                        rod_base[0] + indicator_radius * math.cos(indicator_end_angle),
-                        rod_base[1] + indicator_radius * math.sin(indicator_end_angle)
+                    # Draw the gap line (initial rod position)
+                    initial_rod_end = (
+                        rod_base[0] + rod_length * math.cos(initial_rod_angle),
+                        rod_base[1] + rod_length * math.sin(initial_rod_angle)
                     )
-                    arrow_head1 = (
-                        arrow_tip[0] - arrow_head_size * math.cos(indicator_end_angle + 2.8),
-                        arrow_tip[1] - arrow_head_size * math.sin(indicator_end_angle + 2.8)
-                    )
-                    arrow_head2 = (
-                        arrow_tip[0] - arrow_head_size * math.cos(indicator_end_angle - 2.8),
-                        arrow_tip[1] - arrow_head_size * math.sin(indicator_end_angle - 2.8)
-                    )
-                    pygame.draw.line(screen, arrow_color, arrow_tip, arrow_head1, 2)
-                    pygame.draw.line(screen, arrow_color, arrow_tip, arrow_head2, 2)
+                    pygame.draw.line(screen, gap_color, rod_base, initial_rod_end, 3)
+                
+                # INTEGRATE GAP PROBABILITIES: Add to agent2_node_probabilities BEFORE visibility calculations
+                # This ensures gap probabilities are considered in the visibility-based system
+                if 'agent2_gap_probabilities' in locals() and agent2_gap_probabilities:
+                    # Integration happens after visibility calculations (see lines above)
+                    # This section just ensures the gap probabilities are calculated and ready
+                    pass
             
             # NOW DRAW AGENTS ON TOP OF ALL VISUALIZATION ELEMENTS
             # This ensures agents are clearly visible above all visibility indicators

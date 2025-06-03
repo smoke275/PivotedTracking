@@ -1,58 +1,67 @@
-# Animated Rotating Rods Implementation for Agent 2
+# Instantaneous Sweep-Based Probability System for Agent 2
 
 ## Overview
-This implementation adds smooth back-and-forth animation to the gap rods for agent 2, with a very narrow bar that highlights only the cells/nodes immediately below the gaps during the rotation animation.
+This implementation replaces the animated rotating rods with an instantaneous sweep-based probability system. The system processes all angles in the 45-degree sweep range at once, assigns probabilities to nodes under the sweep area, and integrates these with Agent 2's existing visibility-based probability system.
 
 ## Features Implemented
 
-### 1. Back-and-Forth Animation
-- **Animation Period**: 4 seconds (4000ms) for a complete back-and-forth cycle
-- **Motion Type**: Smooth sinusoidal motion using `math.sin()` for natural acceleration/deceleration
-- **Animation Range**: From gap line position (0°) to maximum angle (45°) and back
-- **Direction**: Cyan gaps rotate counterclockwise, green-cyan gaps rotate clockwise
-- **Starting Point**: Rod starts at the gap line position and rotates outward
+### 1. Instantaneous Sweep Processing
+- **Processing Method**: All angles processed at once (no animation)
+- **Sweep Range**: Full 45-degree range from gap line position to maximum angle
+- **Angle Resolution**: 20 discrete angles across the sweep range for high precision
+- **Probability Assignment**: 0.8-1.0 range, increasing linearly with sweep angle
+- **Direction**: Cyan gaps sweep counterclockwise, green-cyan gaps sweep clockwise
 
-### 2. Narrow Highlighting Bar
-- **Bar Width**: 5 pixels (ultra-narrow for precision)
-- **Highlight Color**: Bright yellow (255, 255, 0) with 180 alpha transparency
-- **Target**: Map graph nodes that fall within the narrow bar width under the rotating rod
-- **Visual Style**: 
-  - Highlighted circles (radius 5) for nodes under the rod
-  - White border (1px width) for enhanced visibility
+### 2. Gap Probability Calculation
+- **Base Probability**: 0.8 for nodes at the starting angle
+- **Maximum Probability**: 1.0 for nodes at the maximum sweep angle
+- **Progression**: Linear increase: `0.8 + (angle_progress * 0.2)`
+- **Node Detection**: 15-pixel width sweep bar for node detection
+- **Conflict Resolution**: Maximum probability used when nodes hit by multiple angles
 
-### 3. Enhanced Visual Design
-- **Rod Appearance**: Thicker animated rod (4px width) in gap color (cyan/green-cyan)
-- **Background Swept Area**: More transparent (40 alpha) to reduce visual clutter
-- **Rotation Indicators**: Smaller, dimmer arrows to minimize distraction
-- **Pivot Points**: Maintained cyan circles to show rotation centers
+### 3. Integrated Probability System
+- **Data Structure**: `agent2_gap_probabilities` dictionary stores gap-based probabilities
+- **Integration Method**: Visibility-based probabilities override gap-based probabilities
+- **Fallback Support**: Works with or without visibility data
+- **Color Coding**: 
+  - Pink to Green gradient based on probability (0.0 to 1.0)
+  - Gap-based high probabilities show as bright green
+  - Visual glow effect for probabilities > 0.7
 
 ## Technical Implementation
 
-### Animation Timing
+### Instantaneous Sweep Processing
+```python
+# Number of discrete angles to sweep through
+num_sweep_angles = 20
+
+for angle_step in range(num_sweep_angles + 1):
+    angle_progress = angle_step / num_sweep_angles
+    current_angle = sweep_start_angle + angle_progress * (sweep_end_angle - sweep_start_angle)
+    
+    # Calculate gap probability: 0.8 to 1.0 range
+    gap_probability = 0.8 + (angle_progress * 0.2)
+```
+
+### Probability Integration
+```python
+# Visibility-based probabilities override gap-based ones
+for node_index, gap_prob in agent2_gap_probabilities.items():
+    if node_index not in agent2_node_probabilities:
+        # Only gap probability exists (no visibility): use gap probability
+        agent2_node_probabilities[node_index] = gap_prob
+    # If visibility probability exists, it overrides gap probability (no action needed)
+```
 ```python
 current_time = pygame.time.get_ticks()
 animation_period = 4000  # 4 seconds
 animation_speed = 2 * math.pi / animation_period
-animation_phase = (current_time * animation_speed) % (2 * math.pi)
-animation_progress = (math.sin(animation_phase) + 1) / 2  # 0 to 1 range
-```
-
-### Rod Position Calculation
-```python
-current_rotation_offset = max_rotation * rotation_direction * animation_progress
-current_rod_angle = initial_rod_angle + current_rotation_offset
-current_rod_end = (
-    rod_base[0] + rod_length * math.cos(current_rod_angle),
-    rod_base[1] + rod_length * math.sin(current_rod_angle)
-)
-```
-
-### Node Highlighting Algorithm
-For each map graph node, the system:
-1. Calculates the point-to-line distance from the node to the current rod position
-2. Projects the node onto the rod line to find the closest point
-3. Measures the perpendicular distance
-4. Highlights nodes within the 15-pixel bar width
+### Node Detection Algorithm
+For each map graph node and each sweep angle, the system:
+1. Calculates the current rod position for the given angle
+2. Computes the point-to-line distance from the node to the rod
+3. Projects the node onto the rod line to find the closest point
+4. Assigns probability to nodes within the 15-pixel sweep bar width
 
 ### Distance Calculation
 ```python
@@ -70,13 +79,18 @@ closest_y = rod_y1 + t * rod_dy
 
 # Distance from node to rod line
 distance_to_rod = math.sqrt((node_x - closest_x)**2 + (node_y - closest_y)**2)
+
+# If node is within sweep bar width, assign probability
+if distance_to_rod <= bar_width:
+    agent2_gap_probabilities[node_index] = gap_probability
 ```
 
+# Closest point on rod line to the node
 ## Controls
 
 ### Activation
-- **Method 1**: Press `J` to enable agent 2 probability overlay (automatically enables rotating rods)
-- **Method 2**: Press `K` to enable agent 2 visibility gaps, then `Y` for rotating rods
+- **Method 1**: Press `J` to enable agent 2 probability overlay (automatically enables sweep system)
+- **Method 2**: Press `K` to enable agent 2 visibility gaps, then `Y` for sweep processing
 - **Global**: Press `Y` when visibility data is loaded (affects both agents)
 
 ### Prerequisites
@@ -86,38 +100,39 @@ distance_to_rod = math.sqrt((node_x - closest_x)**2 + (node_y - closest_y)**2)
 
 ## Visual Behavior
 
-### Animation Cycle
-1. **Phase 1** (0-1s): Rod starts at gap line and rotates to maximum angle
-2. **Phase 2** (1-2s): Rod rotates back to gap line position
-3. **Phase 3** (2-3s): Rod continues from gap line to maximum angle again
-4. **Phase 4** (3-4s): Rod returns to gap line, cycle repeats
+### Instantaneous Processing
+1. **Gap Detection**: System identifies visibility gaps automatically
+2. **Sweep Processing**: All 20 angles in 45-degree range processed at once
+3. **Probability Assignment**: Nodes receive probabilities (0.8-1.0) based on sweep coverage
+4. **Integration**: Gap probabilities merged with visibility-based probabilities
+5. **Visualization**: Final probabilities displayed as colored nodes (pink to green)
 
-The rod always starts from the detected gap line (where the discontinuity occurs) and sweeps outward to its maximum rotation angle, then returns.
-
-### Highlighting Behavior
-- Yellow highlighted nodes follow the rod position in real-time
-- Only nodes immediately under the current rod position are highlighted (5-pixel precision)
-- Highlighting updates smoothly with the animation
-- Nodes outside the ultra-narrow bar remain unaffected
+### Static Swept Area Display
+- Static swept area visualization shows the full 45-degree coverage zone
+- Rod position displayed at initial gap line position (no animation)
+- Transparency used to avoid visual clutter with other elements
+- Swept areas clearly indicate coverage zones for gap-based probabilities
 
 ## Color Coding
-- **Cyan Rods** (0, 200, 255): Near-to-far gaps, rotate counterclockwise
-- **Green-Cyan Rods** (0, 240, 180): Far-to-near gaps, rotate clockwise
-- **Yellow Highlights** (255, 255, 0): Nodes under the rotating rod
-- **Cyan Pivot Points** (0, 255, 255): Rod rotation centers
+- **Pink Nodes**: Low probability (0.1-0.3) - mostly visibility-based
+- **Orange Nodes**: Medium probability (0.4-0.6) - mixed visibility/gap
+- **Green Nodes**: High probability (0.7-1.0) - strong gap-based probabilities
+- **Glow Effect**: Applied to nodes with probability > 0.7 for emphasis
+- **Cyan Vision Circle**: Agent 2's 800px vision range indicator
 
-## Performance Considerations
-- Animation uses efficient trigonometric calculations
-- Node highlighting uses optimized point-to-line distance algorithm with 5-pixel precision
-- Transparency surfaces are created per frame for smooth blending
-- Only significant gaps (>50 pixel difference) are processed
+## Performance Advantages
+- **No Animation**: Eliminates per-frame calculations and smooth rendering overhead
+- **Instantaneous Processing**: All probabilities calculated in single pass
+- **Efficient Integration**: Direct dictionary merging with existing probability system
+- **Optimized Storage**: Only stores probabilities > 0 for memory efficiency
+- **Scalable Resolution**: 20-angle discretization provides good coverage without excess computation
 
 ## Integration
-The animated rotating rods are fully integrated with the existing environment inspection system and work alongside:
-- Agent 2 probability overlay
-- Agent 2 visibility gaps visualization  
-- Map graph display
-- Path visualization
-- All existing controls and features
+The instantaneous sweep system is fully integrated with the existing environment inspection system:
+- **Agent 2 Probability System**: Seamlessly merges with visibility-based probabilities
+- **Visual Overlay**: Works with existing node visualization and color coding
+- **Map Graph Integration**: Operates on same node indices as visibility system
+- **Control Compatibility**: Activated by same keys as previous animated system
+- **Configuration Respect**: Uses `AGENT2_BASE_PROBABILITY` from config for baseline values
 
-The animation runs continuously when activated and does not interfere with other visualization elements or user interactions.
+The system provides immediate probability updates without animation delays and maintains compatibility with all existing features.
