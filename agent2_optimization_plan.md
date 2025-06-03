@@ -3,6 +3,10 @@
 ## Overview
 This is a stepwise plan to optimize the performance of Agent 2 probability generation in the environment inspection tool. The current implementation processes visibility-based and gap-based probabilities, which can be computationally expensive for large maps with many nodes.
 
+**TARGET FILE**: `inspect_environment.py` and its underlying `environment_inspection_simulation.py`
+
+**CLEANUP NOTE**: Remove the optimization reference comment from `inspect_environment.py` when all optimization phases are complete.
+
 ## Current Performance Analysis
 - **Primary bottleneck**: Agent 2 probability calculations in `environment_inspection_simulation.py` (lines 2649+)
 - **Key components**: 

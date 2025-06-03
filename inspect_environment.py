@@ -2,6 +2,11 @@
 """
 Run the environment inspection tool.
 This script launches a visualization of just the environment without any agents.
+
+NOTE: Agent 2 probability generation optimization is planned for this file.
+See agent2_optimization_plan.md for the detailed 6-phase optimization roadmap
+targeting the performance bottlenecks in environment_inspection_simulation.py
+related to Agent 2's visibility-based and gap-based probability calculations.
 """
 import os
 import sys
