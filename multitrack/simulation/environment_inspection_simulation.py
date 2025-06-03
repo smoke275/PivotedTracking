@@ -126,7 +126,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
     AGENT_RADIUS = 16
 
     # Initialize font for display
-    font = pygame.font.SysFont('Arial', 18)
+    font = pygame.font.SysFont('Arial', 14)
 
     # Clock for controlling the frame rate
     clock = pygame.time.Clock()
@@ -387,6 +387,16 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
     map_graph_enabled = True  # Map graph functionality always enabled
     show_map_graph_visuals = True  # Start with map graph visuals visible
     
+    # FPS tracking variables
+    show_fps = True
+    frame_times = []
+    fps = 0
+    avg_frame_time = 0
+    frame_start_time = 0
+    
+    # Agent 2 computation timing
+    agent2_computation_ms = 0
+    
     # Handle automatic loading and analysis of visibility data if requested
     if load_visibility:
         print("Auto-loading visibility data requested...")
@@ -445,12 +455,17 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
     
     try:
         while running:
+            frame_start_time = pygame.time.get_ticks()
+            
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         running = False
+                    elif event.key == pygame.K_q:
+                        # Toggle FPS display
+                        show_fps = not show_fps
                     elif event.key == pygame.K_g:
                         # Toggle map graph visual display (functionality remains enabled)
                         show_map_graph_visuals = not show_map_graph_visuals
@@ -1114,6 +1129,16 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     text_surf = stats_font.render(text, True, (200, 200, 255))
                     screen.blit(text_surf, (stats_x + 10, stats_y + 10 + i * 25))
 
+            # Calculate FPS for this frame
+            if frame_start_time:  # Only calculate if frame_start_time exists
+                frame_end_time = pygame.time.get_ticks()
+                frame_time = frame_end_time - frame_start_time
+                frame_times.append(frame_time)
+                if len(frame_times) > 30:
+                    frame_times.pop(0)
+                avg_frame_time = sum(frame_times) / len(frame_times)
+                fps = int(1000 / max(1, avg_frame_time))
+
             # Display info text
             info_text = [
                 "Environment Inspection Mode",
@@ -1123,6 +1148,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 "WASD Keys: Control cyan agent (2nd)",
                 "",
                 "Other Controls:",
+                "Q: Toggle FPS display",
                 "G: Toggle map graph display",
                 "R: Regenerate map graph (when visible)",
                 "V: Analyze node visibility",
@@ -1164,8 +1190,19 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 info_text.append(cache_info)
                 info_text.append(visibility_cache)
             
+            # Add FPS display if enabled
+            if show_fps:
+                info_text.append(f"FPS: {fps} (Avg frame time: {avg_frame_time:.1f}ms)")
+                # Add agent 2 computation time if available and show detailed breakdown
+                if agent2_computation_ms > 0:
+                    info_text.append(f"Agent 2 computation: {agent2_computation_ms}ms")
+                    # Show percentage of frame time consumed by agent 2 computation
+                    if avg_frame_time > 0:
+                        computation_percentage = (agent2_computation_ms / avg_frame_time) * 100
+                        info_text.append(f"  ({computation_percentage:.1f}% of frame time)")
+            
             # Display the info on the screen
-            info_bg = pygame.Surface((SIDEBAR_WIDTH - 20, len(info_text) * 25 + 10))
+            info_bg = pygame.Surface((SIDEBAR_WIDTH - 20, len(info_text) * 20 + 10))
             info_bg.fill((0, 0, 0))
             info_bg.set_alpha(180)
             
@@ -1174,7 +1211,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
             
             for i, text in enumerate(info_text):
                 text_surface = font.render(text, True, (255, 255, 255))
-                screen.blit(text_surface, (ENVIRONMENT_WIDTH + 20, 20 + i * 25))
+                screen.blit(text_surface, (ENVIRONMENT_WIDTH + 20, 20 + i * 20))
 
             # Draw visibility data if selected node and visibility map exist
             if map_graph_enabled and selected_node_index is not None:
@@ -2616,6 +2653,15 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
             # INSTANTANEOUS SWEEP-BASED PROBABILITY ASSIGNMENT FOR AGENT 2 (Independent section)
             # Can be enabled either globally via Y key (show_rotating_rods) or individually via J key (show_agent2_rods)
             if (show_rotating_rods or show_agent2_rods) and visibility_map and gap_lines:
+                # PERFORMANCE TIMING: Start measuring agent 2 computation time
+                agent2_computation_start = pygame.time.get_ticks()
+                
+                # Count operations for debugging
+                total_gaps_processed = 0
+                total_angles_processed = 0
+                total_nodes_checked = 0
+                total_probabilities_assigned = 0
+                
                 # INSTANTANEOUS SWEEP: Process all angles at once to assign gap probabilities
                 agent2_gap_probabilities = {}  # Stores gap-based probabilities separate from visibility
                 
@@ -2667,6 +2713,8 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     num_sweep_angles = 20
                     
                     for angle_step in range(num_sweep_angles + 1):
+                        total_angles_processed += 1
+                        
                         # Calculate current angle in the sweep
                         angle_progress = angle_step / num_sweep_angles
                         current_angle = sweep_start_angle + angle_progress * (sweep_end_angle - sweep_start_angle)
@@ -2686,6 +2734,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         
                         if map_graph and map_graph.nodes:
                             for i, node in enumerate(map_graph.nodes):
+                                total_nodes_checked += 1
                                 node_x, node_y = node
                                 
                                 # Calculate distance from node to the rod line (point to line distance)
@@ -2714,6 +2763,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                                     
                                     # If node is within the sweep bar width, assign probability
                                     if distance_to_rod <= bar_width:
+                                        total_probabilities_assigned += 1
                                         # Use maximum probability if node gets hit by multiple sweep angles
                                         if i in agent2_gap_probabilities:
                                             agent2_gap_probabilities[i] = max(agent2_gap_probabilities[i], gap_probability)
@@ -2806,6 +2856,13 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     # Integration happens after visibility calculations (see lines above)
                     # This section just ensures the gap probabilities are calculated and ready
                     pass
+                
+                # PERFORMANCE TIMING: End measuring agent 2 computation time
+                agent2_computation_end = pygame.time.get_ticks()
+                agent2_computation_time = agent2_computation_end - agent2_computation_start
+                
+                # Store computation time for FPS display (add to info text if enabled)
+                agent2_computation_ms = agent2_computation_time
             
             # NOW DRAW AGENTS ON TOP OF ALL VISUALIZATION ELEMENTS
             # This ensures agents are clearly visible above all visibility indicators
