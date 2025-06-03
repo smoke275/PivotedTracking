@@ -69,15 +69,26 @@
 
 ## 📝 Memory for Future LLMs
 
-**This file serves as concise active context. For historical details see:**
-- `PHASE1_COMPLETION_SUMMARY.md` - Phase 1 detailed results
-- `agent2_optimization_archive.md` - Full historical planning documents
-- Performance data: `agent2_performance_log.csv`
+**🗂️ DOCUMENTATION STRUCTURE:**
+- **THIS FILE** (`docs/optimization/agent2_optimization_plan.md`) - ACTIVE PLAN (concise, <100 lines)
+- **`docs/optimization/OPTIMIZATION_README.md`** - NAVIGATION GUIDE (explains all files)
+- **`docs/optimization/PHASE1_COMPLETION_SUMMARY.md`** - Phase 1 detailed results
+- **`docs/optimization/agent2_optimization_archive.md`** - Full historical planning documents
+- **`docs/optimization/agent2_performance_log.csv`** - Live performance data
+- **`inspect_environment.py`** - Entry point with test instructions
 
-**Always update this file when:**
+**📍 MAIN WORKFLOW ENTRY POINTS:**
+1. **New LLM Session**: Start with `docs/optimization/OPTIMIZATION_README.md` for navigation
+2. **Continue Work**: Check THIS FILE for current status and next actions
+3. **Run Tests**: Use `inspect_environment.py` → Press 'J' → Move with WASD
+4. **Get Background**: Read `docs/optimization/PHASE1_COMPLETION_SUMMARY.md` for context
+
+**⚡ ALWAYS UPDATE THIS FILE WHEN:**
 - ✅ Moving tasks from ❌ to 🔄 to ✅
 - 📊 Recording new performance measurements  
 - 🎯 Changing current phase status
 - 🚀 Updating next actions
+
+**🎯 OPTIMIZATION TARGET:** `multitrack/simulation/environment_inspection_simulation.py` lines 2649-2860
 
 **Keep this file under 100 lines for optimal LLM context management.**

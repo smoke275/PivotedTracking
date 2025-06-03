@@ -9,10 +9,10 @@ Agent 2 probability generation optimization is currently in progress.
 CURRENT STATUS: Phase 1 Complete → Phase 2 Ready (Spatial Optimization)
 
 📋 OPTIMIZATION DOCUMENTATION:
-- PRIMARY PLAN: agent2_optimization_plan.md (active, concise <100 lines)
-- PHASE 1 RESULTS: PHASE1_COMPLETION_SUMMARY.md (detailed findings)
-- HISTORICAL CONTEXT: agent2_optimization_archive.md (full background)
-- PERFORMANCE DATA: agent2_performance_log.csv (live measurements)
+- PRIMARY PLAN: docs/optimization/agent2_optimization_plan.md (active, concise <100 lines)
+- PHASE 1 RESULTS: docs/optimization/PHASE1_COMPLETION_SUMMARY.md (detailed findings)
+- HISTORICAL CONTEXT: docs/optimization/agent2_optimization_archive.md (full background)
+- PERFORMANCE DATA: docs/optimization/agent2_performance_log.csv (live measurements)
 
 🎯 TARGET: Lines 2649-2860 in environment_inspection_simulation.py
    Currently: 4.4-4.6s computation per frame → Goal: <16ms (60 FPS)

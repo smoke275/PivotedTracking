@@ -1,6 +1,6 @@
 # Phase 1 Completion Summary - Agent 2 Optimization
 
-**📍 NAVIGATION:** This is detailed results documentation. For current status see `agent2_optimization_plan.md`
+**📍 NAVIGATION:** This is detailed results documentation. For current status see `docs/optimization/agent2_optimization_plan.md`
 
 ## 🎉 PHASE 1 COMPLETED SUCCESSFULLY
 
@@ -8,10 +8,10 @@
 **Objective**: Establish detailed performance profiling and identify bottlenecks in Agent 2 probability calculations
 
 **🔗 RELATED FILES:**
-- **Active Plan**: `agent2_optimization_plan.md` (current status & next actions)
+- **Active Plan**: `docs/optimization/agent2_optimization_plan.md` (current status & next actions)
 - **Entry Point**: `inspect_environment.py` (how to run tests)
-- **Live Data**: `agent2_performance_log.csv` (performance measurements)
-- **Full Context**: `agent2_optimization_archive.md` (historical background)
+- **Live Data**: `docs/optimization/agent2_performance_log.csv` (performance measurements)
+- **Full Context**: `docs/optimization/agent2_optimization_archive.md` (historical background)
 
 ## ✅ Completed Implementations
 
