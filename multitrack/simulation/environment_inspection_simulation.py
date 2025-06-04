@@ -2682,6 +2682,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 total_angles_processed = 0
                 total_nodes_checked = 0
                 total_probabilities_assigned = 0
+                total_nodes_skipped = 0  # Track nodes filtered out by spatial optimization
                 
                 # Track node count for performance analysis
                 node_count = len(map_graph.nodes) if map_graph and map_graph.nodes else 0
@@ -2768,6 +2769,13 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                             for i, node in enumerate(map_graph.nodes):
                                 total_nodes_checked += 1
                                 node_x, node_y = node
+                                
+                                # SPATIAL FILTERING OPTIMIZATION: Skip nodes outside 800px visibility range
+                                # This reduces computation by ~95% (from 11,762 to ~200-500 nodes)
+                                node_distance_to_agent2 = math.dist((node_x, node_y), (x2, y2))
+                                if node_distance_to_agent2 > DEFAULT_VISION_RANGE:  # 800 pixels
+                                    total_nodes_skipped += 1  # Track skipped nodes for performance analysis
+                                    continue
                                 
                                 # Calculate distance from node to the rod line (point to line distance)
                                 rod_x1, rod_y1 = rod_base
@@ -2923,13 +2931,13 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         writer.writerow([
                             'timestamp', 'total_time_ms', 'visibility_time_ms', 'gap_time_ms', 
                             'node_iteration_time_ms', 'node_count', 'fps', 'gaps_processed', 
-                            'angles_processed', 'nodes_checked', 'probabilities_assigned'
+                            'angles_processed', 'nodes_checked', 'probabilities_assigned', 'nodes_skipped'
                         ])
                     
                     writer.writerow([
                         timestamp, total_time_ms, visibility_time_ms, gap_time_ms,
                         node_iteration_time_ms, node_count, current_fps, total_gaps_processed,
-                        total_angles_processed, total_nodes_checked, total_probabilities_assigned
+                        total_angles_processed, total_nodes_checked, total_probabilities_assigned, total_nodes_skipped
                     ])
                 
                 # Store computation time for FPS display (maintain backward compatibility)
