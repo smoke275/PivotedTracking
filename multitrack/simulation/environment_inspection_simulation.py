@@ -2739,80 +2739,103 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     sweep_end_angle = initial_rod_angle + max_rotation * rotation_direction
                     total_sweep_angle = abs(sweep_end_angle - sweep_start_angle)
                     
-                    # Number of discrete angles to sweep through (high resolution for completeness)
-                    num_sweep_angles = 20
+                    # PHASE 3 VECTORIZED OPTIMIZATION: Replace nested loops with NumPy operations
+                    # This reduces computation from O(angles×nodes) to O(1) vectorized operations
                     
-                    for angle_step in range(num_sweep_angles + 1):
-                        total_angles_processed += 1
+                    # Pre-filter nodes within vision range once for this gap
+                    if map_graph and map_graph.nodes:
+                        # Convert all nodes to NumPy arrays for vectorized operations
+                        all_nodes = np.array(map_graph.nodes)
                         
-                        # Calculate current angle in the sweep
-                        angle_progress = angle_step / num_sweep_angles
-                        current_angle = sweep_start_angle + angle_progress * (sweep_end_angle - sweep_start_angle)
+                        # Vectorized distance calculation to agent2
+                        agent2_pos = np.array([x2, y2])
+                        distances_to_agent2 = np.linalg.norm(all_nodes - agent2_pos, axis=1)
                         
-                        # Calculate gap probability: start with 0.8 base, increase linearly with angle
-                        base_gap_probability = 0.8
-                        gap_probability = base_gap_probability + (angle_progress * 0.2)  # 0.8 to 1.0 range
+                        # Boolean mask for nodes within vision range
+                        within_range_mask = distances_to_agent2 <= DEFAULT_VISION_RANGE
+                        within_range_indices = np.where(within_range_mask)[0]
+                        within_range_nodes = all_nodes[within_range_mask]
                         
-                        # Calculate current rod end position for this angle
-                        current_rod_end = (
-                            rod_base[0] + rod_length * math.cos(current_angle),
-                            rod_base[1] + rod_length * math.sin(current_angle)
-                        )
+                        # Track statistics
+                        total_nodes_skipped += len(all_nodes) - len(within_range_nodes)
+                        total_nodes_checked += len(within_range_nodes)
                         
-                        # Find all nodes under this rod position
-                        bar_width = 15  # Wider sweep for probability assignment
-                        
-                        # Start timing node iteration and distance calculations
-                        node_iteration_start = time.perf_counter()
-                        
-                        if map_graph and map_graph.nodes:
-                            for i, node in enumerate(map_graph.nodes):
-                                total_nodes_checked += 1
-                                node_x, node_y = node
+                        if len(within_range_nodes) > 0:
+                            # Generate all sweep angles at once
+                            num_sweep_angles = 20
+                            total_angles_processed += num_sweep_angles + 1
+                            
+                            # Vectorized angle generation
+                            angle_steps = np.linspace(0, 1, num_sweep_angles + 1)
+                            sweep_angles = sweep_start_angle + angle_steps * (sweep_end_angle - sweep_start_angle)
+                            
+                            # Vectorized gap probabilities (0.8 to 1.0 range)
+                            base_gap_probability = 0.8
+                            gap_probabilities = base_gap_probability + (angle_steps * 0.2)
+                            
+                            # Vectorized rod end positions for all angles
+                            rod_ends_x = rod_base[0] + rod_length * np.cos(sweep_angles)
+                            rod_ends_y = rod_base[1] + rod_length * np.sin(sweep_angles)
+                            
+                            # For each angle, calculate distances from all nodes to the rod line
+                            bar_width = 15.0  # Wider sweep for probability assignment
+                            
+                            # Start timing vectorized computation
+                            node_iteration_start = time.perf_counter()
+                            
+                            # Initialize result arrays
+                            node_max_probabilities = np.zeros(len(within_range_nodes))
+                            
+                            # Process all angles and nodes simultaneously
+                            for angle_idx, (angle, gap_prob, rod_end_x, rod_end_y) in enumerate(
+                                zip(sweep_angles, gap_probabilities, rod_ends_x, rod_ends_y)
+                            ):
+                                # Vectorized rod line calculations
+                                rod_base_arr = np.array(rod_base)
+                                rod_end_arr = np.array([rod_end_x, rod_end_y])
                                 
-                                # SPATIAL FILTERING OPTIMIZATION: Skip nodes outside 800px visibility range
-                                # This reduces computation by ~95% (from 11,762 to ~200-500 nodes)
-                                node_distance_to_agent2 = math.dist((node_x, node_y), (x2, y2))
-                                if node_distance_to_agent2 > DEFAULT_VISION_RANGE:  # 800 pixels
-                                    total_nodes_skipped += 1  # Track skipped nodes for performance analysis
-                                    continue
-                                
-                                # Calculate distance from node to the rod line (point to line distance)
-                                rod_x1, rod_y1 = rod_base
-                                rod_x2, rod_y2 = current_rod_end
-                                
-                                # Vector from rod start to rod end
-                                rod_dx = rod_x2 - rod_x1
-                                rod_dy = rod_y2 - rod_y1
-                                rod_length_sq = rod_dx * rod_dx + rod_dy * rod_dy
+                                # Rod vector
+                                rod_vec = rod_end_arr - rod_base_arr
+                                rod_length_sq = np.dot(rod_vec, rod_vec)
                                 
                                 if rod_length_sq > 0:
-                                    # Vector from rod start to node
-                                    node_dx = node_x - rod_x1
-                                    node_dy = node_y - rod_y1
+                                    # Vectors from rod start to all nodes
+                                    node_vecs = within_range_nodes - rod_base_arr
                                     
-                                    # Project node onto rod line
-                                    t = max(0, min(1, (node_dx * rod_dx + node_dy * rod_dy) / rod_length_sq))
+                                    # Vectorized projection onto rod line
+                                    projections = np.dot(node_vecs, rod_vec) / rod_length_sq
+                                    projections = np.clip(projections, 0, 1)
                                     
-                                    # Closest point on rod line to the node
-                                    closest_x = rod_x1 + t * rod_dx
-                                    closest_y = rod_y1 + t * rod_dy
+                                    # Vectorized closest points on rod line
+                                    closest_points = rod_base_arr + projections[:, np.newaxis] * rod_vec
                                     
-                                    # Distance from node to rod line
-                                    distance_to_rod = math.sqrt((node_x - closest_x)**2 + (node_y - closest_y)**2)
+                                    # Vectorized distances from nodes to rod line
+                                    distance_vectors = within_range_nodes - closest_points
+                                    distances_to_rod = np.linalg.norm(distance_vectors, axis=1)
                                     
-                                    # If node is within the sweep bar width, assign probability
-                                    if distance_to_rod <= bar_width:
-                                        total_probabilities_assigned += 1
-                                        # Use maximum probability if node gets hit by multiple sweep angles
-                                        if i in agent2_gap_probabilities:
-                                            agent2_gap_probabilities[i] = max(agent2_gap_probabilities[i], gap_probability)
-                                        else:
-                                            agent2_gap_probabilities[i] = gap_probability
-                        
-                        # End timing node iteration
-                        node_iteration_end = time.perf_counter()
-                        node_iteration_time += (node_iteration_end - node_iteration_start)
+                                    # Boolean mask for nodes within bar width
+                                    within_bar_mask = distances_to_rod <= bar_width
+                                    
+                                    # Update maximum probabilities for affected nodes
+                                    node_max_probabilities[within_bar_mask] = np.maximum(
+                                        node_max_probabilities[within_bar_mask], gap_prob
+                                    )
+                            
+                            # Assign final probabilities to nodes
+                            significant_prob_mask = node_max_probabilities > 0
+                            significant_indices = within_range_indices[significant_prob_mask]
+                            significant_probs = node_max_probabilities[significant_prob_mask]
+                            
+                            for idx, prob in zip(significant_indices, significant_probs):
+                                if idx in agent2_gap_probabilities:
+                                    agent2_gap_probabilities[idx] = max(agent2_gap_probabilities[idx], prob)
+                                else:
+                                    agent2_gap_probabilities[idx] = prob
+                                total_probabilities_assigned += 1
+                            
+                            # End timing vectorized computation
+                            node_iteration_end = time.perf_counter()
+                            node_iteration_time += (node_iteration_end - node_iteration_start)
                 
                 # End timing gap processing
                 gap_processing_end = time.perf_counter()

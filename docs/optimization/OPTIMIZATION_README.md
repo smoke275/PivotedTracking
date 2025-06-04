@@ -27,6 +27,16 @@ This directory contains multiple files related to the Agent 2 probability calcul
 - **Contains**: Complete performance analysis, implementation details
 - **Use When**: Understanding what was already accomplished
 
+### `docs/optimization/PHASE2_SPATIAL_FILTERING_RESULTS.md` ✅ **PHASE 2 RESULTS**
+- **Purpose**: Spatial filtering optimization results
+- **Contains**: Modest 5% improvement analysis and findings
+- **Use When**: Understanding Phase 2 implementation details
+
+### `docs/optimization/PHASE3_VECTORIZATION_RESULTS.md` ⭐ **PHASE 3 RESULTS - MAJOR SUCCESS**
+- **Purpose**: Vectorization optimization breakthrough results
+- **Contains**: 28x speedup analysis, NumPy implementation details
+- **Use When**: Understanding the massive performance improvement achieved
+
 ### `docs/optimization/agent2_optimization_archive.md` 📖 **FULL HISTORY**
 - **Purpose**: Complete historical context and detailed planning
 - **Contains**: Original 6-phase plan, full methodology, historical updates
@@ -43,14 +53,18 @@ This directory contains multiple files related to the Agent 2 probability calcul
 
 1. **Check Status**: Read `docs/optimization/agent2_optimization_plan.md` for current phase
 2. **Run Tests**: Use `inspect_environment.py` → Press 'J' → Move with WASD
-3. **Analyze Data**: Check `docs/optimization/agent2_performance_log.csv` for measurements
-4. **Get Context**: Reference `docs/optimization/PHASE1_COMPLETION_SUMMARY.md` for background
+3. **Analyze Data**: Check `agent2_performance_log.csv` for measurements
+4. **Get Context**: Reference phase completion summaries for background
 5. **Update Progress**: Always update `docs/optimization/agent2_optimization_plan.md` when making changes
 
-## 🎯 CURRENT STATUS (June 3, 2025)
+## 🎯 CURRENT STATUS (Updated)
 
 - **Phase 1**: ✅ COMPLETED (Performance profiling)
-- **Phase 2**: 🔄 READY (Spatial optimization - 95% performance improvement expected)
-- **Critical Finding**: Need to filter 11,762 nodes down to ~200-500 within 800px range
+- **Phase 2**: ✅ COMPLETED (Spatial optimization - modest ~5% improvement)  
+- **Phase 3**: ✅ COMPLETED ⭐ **MAJOR SUCCESS** (Vectorization - 28x speedup, 96% reduction)
+- **Phase 4**: 🔄 READY (Multi-threading & advanced optimization - target 60 FPS)
 
-**Next Action**: Implement spatial filtering in gap processing loop around line 2670-2790
+**ACHIEVEMENT**: **4,200ms → ~150ms per frame** through vectorization
+**REMAINING GAP**: Need ~10x more improvement (150ms → <16ms for 60 FPS)
+
+**Next Action**: Implement Phase 4 - Multi-threading, spatial indexing, selective updates
