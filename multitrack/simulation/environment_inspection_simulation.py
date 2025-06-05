@@ -20,6 +20,165 @@ from multitrack.utils.map_graph import MapGraph
 from multitrack.utils.pathfinding import find_shortest_path, calculate_path_length, smooth_path, create_dynamically_feasible_path, find_closest_node
 from multitrack.utils.optimize_path import optimize_path_with_visibility
 
+# PHASE 4B OPTIMIZATION: Agent2ComputationOptimizer for selective computation
+class Agent2ComputationOptimizer:
+    """
+    Phase 4B optimization: Selective computation system to avoid unnecessary recomputations
+    when agent state hasn't changed significantly.
+    """
+    def __init__(self):
+        self.last_position = None
+        self.last_angle = None
+        self.last_result = None
+        self.last_gap_probabilities = None
+        
+        # Configurable thresholds for detecting significant changes
+        self.position_threshold = 5.0  # pixels - recompute if agent moves >5px
+        self.angle_threshold = 0.1     # radians (~5.7 degrees) - recompute if angle changes significantly
+        
+        # Performance tracking
+        self.computation_skipped = 0
+        self.computation_performed = 0
+        
+        # Cache invalidation tracking
+        self.frames_since_last_computation = 0
+        self.max_frames_without_computation = 30  # Force recomputation every 30 frames max
+    
+    def needs_recomputation(self, current_pos, current_angle):
+        """
+        Determine if Agent2 computation needs to be performed based on state changes.
+        
+        Args:
+            current_pos: Current agent position (x, y)
+            current_angle: Current agent angle in radians
+            
+        Returns:
+            bool: True if recomputation is needed, False if cached result can be used
+        """
+        # Always compute on first run
+        if self.last_position is None:
+            return True
+            
+        # Force recomputation after max frames to prevent stale data
+        if self.frames_since_last_computation >= self.max_frames_without_computation:
+            return True
+        
+        # Check position change
+        pos_delta = math.sqrt((current_pos[0] - self.last_position[0])**2 + 
+                             (current_pos[1] - self.last_position[1])**2)
+        
+        # Check angle change
+        angle_delta = abs(current_angle - self.last_angle)
+        # Handle angle wraparound (e.g., from 359° to 1°)
+        angle_delta = min(angle_delta, 2*math.pi - angle_delta)
+        
+        return (pos_delta > self.position_threshold or 
+                angle_delta > self.angle_threshold)
+    
+    def update_state(self, position, angle, gap_probabilities):
+        """Update cached state after computation"""
+        self.last_position = position
+        self.last_angle = angle
+        self.last_gap_probabilities = gap_probabilities.copy() if gap_probabilities else {}
+        self.computation_performed += 1
+        self.frames_since_last_computation = 0
+    
+    def skip_computation(self):
+        """Record that computation was skipped and return cached result"""
+        self.computation_skipped += 1
+        self.frames_since_last_computation += 1
+        return self.last_gap_probabilities if self.last_gap_probabilities else {}
+    
+    def get_performance_stats(self):
+        """Get performance statistics for monitoring"""
+        total_calls = self.computation_performed + self.computation_skipped
+        skip_rate = self.computation_skipped / total_calls if total_calls > 0 else 0
+        return {
+            'total_calls': total_calls,
+            'computations_performed': self.computation_performed,
+            'computations_skipped': self.computation_skipped,
+            'skip_rate_percent': skip_rate * 100,
+            'frames_since_last': self.frames_since_last_computation
+        }
+
+# Global instance for Agent2 computation optimization
+agent2_optimizer = Agent2ComputationOptimizer()
+
+# PHASE 4B OPTIMIZATION: Mathematical shortcuts and fast approximations
+class FastMathOptimizations:
+    """
+    Phase 4B optimization: Fast mathematical operations for improved performance.
+    Provides approximations and optimized calculations that maintain visual quality.
+    """
+    
+    @staticmethod
+    def fast_distance_squared(p1, p2):
+        """Fast squared distance calculation (avoids sqrt when only comparison needed)"""
+        dx = p1[0] - p2[0]
+        dy = p1[1] - p2[1]
+        return dx * dx + dy * dy
+    
+    @staticmethod
+    def fast_distance_check(p1, p2, threshold):
+        """Fast distance check using squared distance to avoid sqrt"""
+        return FastMathOptimizations.fast_distance_squared(p1, p2) < (threshold * threshold)
+    
+    @staticmethod
+    def fast_normalize_angle(angle):
+        """Fast angle normalization to [0, 2π] range"""
+        while angle < 0:
+            angle += 2 * math.pi
+        while angle >= 2 * math.pi:
+            angle -= 2 * math.pi
+        return angle
+    
+    @staticmethod
+    def fast_angle_difference(angle1, angle2):
+        """Fast calculation of minimum angle difference (handles wraparound)"""
+        diff = abs(angle1 - angle2)
+        return min(diff, 2 * math.pi - diff)
+
+class TrigLookupTable:
+    """
+    Phase 4B optimization: Pre-computed trigonometric lookup table for common angles.
+    Trades memory for computation speed.
+    """
+    
+    def __init__(self, precision=1000):
+        self.precision = precision
+        self.angle_step = 2 * math.pi / precision
+        
+        # Pre-compute sin/cos for common angles
+        self.angles = np.linspace(0, 2 * math.pi, precision, endpoint=False)
+        self.cos_table = np.cos(self.angles)
+        self.sin_table = np.sin(self.angles)
+    
+    def fast_cos(self, angle):
+        """Fast cosine lookup with linear interpolation"""
+        # Normalize angle to [0, 2π]
+        angle = angle % (2 * math.pi)
+        
+        # Find nearest table index
+        index = int(angle / self.angle_step)
+        index = min(index, self.precision - 1)
+        
+        return self.cos_table[index]
+    
+    def fast_sin(self, angle):
+        """Fast sine lookup with linear interpolation"""
+        # Normalize angle to [0, 2π]
+        angle = angle % (2 * math.pi)
+        
+        # Find nearest table index
+        index = int(angle / self.angle_step)
+        index = min(index, self.precision - 1)
+        
+        return self.sin_table[index]
+
+# Global instances for mathematical optimizations
+fast_math = FastMathOptimizations()
+trig_lookup = TrigLookupTable(precision=3600)  # 0.1 degree precision
+
 def point_to_line_distance(point, line_start, line_end):
     """
     Calculate the shortest distance from a point to a line segment.
@@ -1621,287 +1780,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                                                                 propagated_probabilities[closest_node_idx], final_probability)
                                                         else:
                                                             propagated_probabilities[closest_node_idx] = final_probability
-                                    
-                                    # Step 3: INTERPOLATION - Fill gaps using neighboring cell approximation
-                                    # Create a spatial lookup for faster neighbor finding
-                                    filled_nodes = {}  # node_idx -> (position, probability)
-                                    for node_idx, prob in propagated_probabilities.items():
-                                        if node_idx < len(map_graph.nodes):
-                                            filled_nodes[node_idx] = (map_graph.nodes[node_idx], prob)
-                                    
-                                    # Find unfilled nodes in the swept area and interpolate their values
-                                    interpolation_radius = 40  # Look for neighbors within this radius
-                                    interpolation_radius_sq = interpolation_radius * interpolation_radius
-                                    
-                                    for node_idx, node in candidate_nodes:
-                                        if node_idx not in propagated_probabilities:  # Only process unfilled nodes
-                                            # Check if this node is actually within the swept arc
-                                            node_to_base = math.atan2(node[1] - rod_base[1], node[0] - rod_base[0])
-                                            
-                                            # Normalize angle to same range as sweep angles
-                                            while node_to_base < sweep_start_angle - math.pi:
-                                                node_to_base += 2 * math.pi
-                                            while node_to_base > sweep_start_angle + math.pi:
-                                                node_to_base -= 2 * math.pi
-                                            
-                                            # Check if within sweep bounds
-                                            if rotation_direction > 0:  # Clockwise
-                                                in_sweep = sweep_start_angle <= node_to_base <= sweep_end_angle
-                                            else:  # Counterclockwise
-                                                in_sweep = sweep_end_angle <= node_to_base <= sweep_start_angle
-                                            
-                                            if in_sweep:
-                                                # Check distance from rod base
-                                                dist_from_base = math.dist(node, rod_base)
-                                                if dist_from_base <= rod_length:
-                                                    # This node is in the swept area but unfilled - interpolate
-                                                    neighbor_probs = []
-                                                    neighbor_weights = []
-                                                    
-                                                    # Find nearby filled nodes
-                                                    for filled_idx, (filled_pos, filled_prob) in filled_nodes.items():
-                                                        dx = node[0] - filled_pos[0]
-                                                        dy = node[1] - filled_pos[1]
-                                                        dist_sq = dx*dx + dy*dy
-                                                        
-                                                        if dist_sq <= interpolation_radius_sq and dist_sq > 0:
-                                                            # Weight by inverse distance
-                                                            weight = 1.0 / (1.0 + math.sqrt(dist_sq))
-                                                            neighbor_probs.append(filled_prob)
-                                                            neighbor_weights.append(weight)
-                                                    
-                                                    # Interpolate if we found neighbors
-                                                    if neighbor_probs:
-                                                        # Weighted average
-                                                        total_weight = sum(neighbor_weights)
-                                                        if total_weight > 0:
-                                                            interpolated_prob = sum(p * w for p, w in zip(neighbor_probs, neighbor_weights)) / total_weight
-                                                            
-                                                            # Apply stronger decay based on distance from rod base
-                                                            decay_factor = max(0.2, 1.0 - (dist_from_base / rod_length) * 0.7)
-                                                            final_interpolated_prob = interpolated_prob * decay_factor
-                                                            
-                                                            if final_interpolated_prob > 0.02:  # Slightly lower threshold for interpolated values
-                                                                propagated_probabilities[node_idx] = final_interpolated_prob
-                            
-                            # ROTATING RODS VISUALIZATION: Show swept areas and rotation indicators (only when display is enabled)
-                            if show_rotating_rods and show_probability_overlay and node_probabilities:
-                                # Process gaps to show static swept areas
-                                for start_point, end_point, gap_size in gap_lines:
-                                    # Only process significant gaps
-                                    if gap_size < 50:
-                                        continue
-                                    
-                                    # Determine gap orientation and near/far points
-                                    start_dist = math.dist(selected_node, start_point)
-                                    end_dist = math.dist(selected_node, end_point)
-                                    
-                                    # Determine near point (pivot point) and far point
-                                    if start_dist < end_dist:
-                                        near_point = start_point
-                                        far_point = end_point
-                                        is_blue_gap = True  # Near-to-far (expanding)
-                                    else:
-                                        near_point = end_point
-                                        far_point = start_point
-                                        is_blue_gap = False  # Far-to-near (contracting)
-                                    
-                                    # Calculate initial rod angle (along the gap line from near to far point)
-                                    initial_rod_angle = math.atan2(far_point[1] - near_point[1], far_point[0] - near_point[0])
-                                    
-                                    # Calculate rod length: should extend from near point to the edge of reachability circle
-                                    # Get agent position and max reachable distance
-                                    agent_x, agent_y = agent.state[0], agent.state[1]
-                                    max_reachable_distance = time_horizon * LEADER_LINEAR_VEL
-                                    
-                                    # Calculate distance from agent to rod base (near point)
-                                    distance_to_rod_base = math.sqrt((near_point[0] - agent_x)**2 + (near_point[1] - agent_y)**2)
-                                    
-                                    # Calculate maximum rod length that stays within reachability circle
-                                    if distance_to_rod_base >= max_reachable_distance:
-                                        # Rod base is outside reachability circle, use minimal rod
-                                        rod_length = 10
-                                    else:
-                                        # Rod length = remaining distance from base to circle edge
-                                        remaining_distance_to_circle = max_reachable_distance - distance_to_rod_base
-                                        
-                                        # Also consider the original gap size as a constraint
-                                        original_gap_rod_length = math.dist(near_point, far_point)
-                                        
-                                        # Use the smaller of the two: gap size or remaining circle distance
-                                        rod_length = min(remaining_distance_to_circle, original_gap_rod_length)
-                                        
-                                        # Ensure minimum rod length for visibility
-                                        rod_length = max(20, rod_length)
-                                    
-                                    max_rotation = math.pi / 4  # Maximum 45 degrees rotation
-                                    
-                                    # Determine rotation direction based on gap color
-                                    if is_blue_gap:
-                                        rotation_direction = -1  # Anticlockwise (counterclockwise)
-                                        gap_color = (100, 150, 255)  # Blue tone
-                                    else:
-                                        rotation_direction = 1   # Clockwise
-                                        gap_color = (200, 100, 255)  # Violet tone
-                                    
-                                    # SINGLE DIRECTION ROTATION: Rod pivots at near point, rotates in one direction only
-                                    rod_base = near_point
-                                    
-                                    # Calculate the swept arc range
-                                    sweep_start_angle = initial_rod_angle
-                                    sweep_end_angle = initial_rod_angle + max_rotation * rotation_direction
-                                    
-                                    # Draw rod base indicator (pivot point)
-                                    pygame.draw.circle(screen, (255, 255, 0), rod_base, 8)
-                                    pygame.draw.circle(screen, (255, 150, 0), rod_base, 4)
-                                    
-                                    # Draw initial rod position (gap line)
-                                    initial_rod_end = (
-                                        rod_base[0] + rod_length * math.cos(initial_rod_angle),
-                                        rod_base[1] + rod_length * math.sin(initial_rod_angle)
-                                    )
-                                    pygame.draw.line(screen, gap_color, rod_base, initial_rod_end, 3)
-                                    
-                                    # Draw the swept area
-                                    sweep_surface = pygame.Surface((screen.get_width(), screen.get_height()), pygame.SRCALPHA)
-                                    
-                                    # Use gap color for swept area with transparency
-                                    sweep_color = (*gap_color, 60)
-                                    
-                                    # Draw the swept arc area as a polygon
-                                    arc_points = [rod_base]
-                                    num_arc_points = 20
-                                    for i in range(num_arc_points + 1):
-                                        t = i / num_arc_points
-                                        angle = sweep_start_angle + t * (sweep_end_angle - sweep_start_angle)
-                                        point = (
-                                            rod_base[0] + rod_length * math.cos(angle),
-                                            rod_base[1] + rod_length * math.sin(angle)
-                                        )
-                                        arc_points.append(point)
-                                    
-                                    pygame.draw.polygon(sweep_surface, sweep_color, arc_points)
-                                    screen.blit(sweep_surface, (0, 0))
-                                    
-                                    # Draw the boundary lines of the swept area
-                                    boundary_color = gap_color
-                                    start_boundary = (
-                                        rod_base[0] + rod_length * math.cos(sweep_start_angle),
-                                        rod_base[1] + rod_length * math.sin(sweep_start_angle)
-                                    )
-                                    end_boundary = (
-                                        rod_base[0] + rod_length * math.cos(sweep_end_angle),
-                                        rod_base[1] + rod_length * math.sin(sweep_end_angle)
-                                    )
-                                    pygame.draw.line(screen, boundary_color, rod_base, start_boundary, 2)
-                                    pygame.draw.line(screen, boundary_color, rod_base, end_boundary, 2)
-                                    
-                                    # Draw rotation direction indicator
-                                    indicator_radius = 25
-                                    indicator_start_angle = initial_rod_angle + (math.pi/8) * rotation_direction * 0.3
-                                    indicator_end_angle = initial_rod_angle + (math.pi/6) * rotation_direction
-                                    
-                                    # Draw curved arrow showing rotation direction
-                                    arrow_color = (255, 255, 255)
-                                    num_arrow_segments = 6
-                                    for i in range(num_arrow_segments):
-                                        t1 = i / num_arrow_segments
-                                        t2 = (i + 1) / num_arrow_segments
-                                        angle1 = indicator_start_angle + t1 * (indicator_end_angle - indicator_start_angle)
-                                        angle2 = indicator_start_angle + t2 * (indicator_end_angle - indicator_start_angle)
-                                        
-                                        point1 = (
-                                            rod_base[0] + indicator_radius * math.cos(angle1),
-                                            rod_base[1] + indicator_radius * math.sin(angle1)
-                                        )
-                                        point2 = (
-                                            rod_base[0] + indicator_radius * math.cos(angle2),
-                                            rod_base[1] + indicator_radius * math.sin(angle2)
-                                        )
-                                        pygame.draw.line(screen, arrow_color, point1, point2, 3)
-                                    
-                                    # Draw arrow head
-                                    arrow_head_size = 8
-                                    arrow_tip = (
-                                        rod_base[0] + indicator_radius * math.cos(indicator_end_angle),
-                                        rod_base[1] + indicator_radius * math.sin(indicator_end_angle)
-                                    )
-                                    arrow_head1 = (
-                                        arrow_tip[0] - arrow_head_size * math.cos(indicator_end_angle + 2.8),
-                                        arrow_tip[1] - arrow_head_size * math.sin(indicator_end_angle + 2.8)
-                                    )
-                                    arrow_head2 = (
-                                        arrow_tip[0] - arrow_head_size * math.cos(indicator_end_angle - 2.8),
-                                        arrow_tip[1] - arrow_head_size * math.sin(indicator_end_angle - 2.8)
-                                    )
-                                    pygame.draw.line(screen, arrow_color, arrow_tip, arrow_head1, 3)
-                                    pygame.draw.line(screen, arrow_color, arrow_tip, arrow_head2, 3)
-                                    # Create a spatial lookup for faster neighbor finding
-                                    filled_nodes = {}  # node_idx -> (position, probability)
-                                    for node_idx, prob in propagated_probabilities.items():
-                                        if node_idx < len(map_graph.nodes):
-                                            filled_nodes[node_idx] = (map_graph.nodes[node_idx], prob)
-                                    
-                                    # Find unfilled nodes in the swept area and interpolate their values
-                                    interpolation_radius = 40  # Look for neighbors within this radius
-                                    interpolation_radius_sq = interpolation_radius * interpolation_radius
-                                    
-                                    for node_idx, node in candidate_nodes:
-                                        if node_idx not in propagated_probabilities:  # Only process unfilled nodes
-                                            # Check if this node is actually within the swept arc
-                                            node_to_base = math.atan2(node[1] - rod_base[1], node[0] - rod_base[0])
-                                            
-                                            # Normalize angle to same range as sweep angles
-                                            while node_to_base < sweep_start_angle - math.pi:
-                                                node_to_base += 2 * math.pi
-                                            while node_to_base > sweep_start_angle + math.pi:
-                                                node_to_base -= 2 * math.pi
-                                            
-                                            # Check if within sweep bounds
-                                            if rotation_direction > 0:  # Clockwise
-                                                in_sweep = sweep_start_angle <= node_to_base <= sweep_end_angle
-                                            else:  # Counterclockwise
-                                                in_sweep = sweep_end_angle <= node_to_base <= sweep_start_angle
-                                            
-                                            if in_sweep:
-                                                # Check distance from rod base
-                                                dist_from_base = math.dist(node, rod_base)
-                                                if dist_from_base <= rod_length:
-                                                    # This node is in the swept area but unfilled - interpolate
-                                                    neighbor_probs = []
-                                                    neighbor_weights = []
-                                                    
-                                                    # Find nearby filled nodes
-                                                    for filled_idx, (filled_pos, filled_prob) in filled_nodes.items():
-                                                        dx = node[0] - filled_pos[0]
-                                                        dy = node[1] - filled_pos[1]
-                                                        dist_sq = dx*dx + dy*dy
-                                                        
-
-
-                                                        if dist_sq <= interpolation_radius_sq and dist_sq > 0:
-                                                            # Weight by inverse distance
-                                                            weight = 1.0 / (1.0 + math.sqrt(dist_sq))
-                                                            neighbor_probs.append(filled_prob)
-                                                            neighbor_weights.append(weight)
-                                                    
-                                                    # Interpolate if we found neighbors
-                                                    if neighbor_probs:
-                                                        # Weighted average
-                                                        total_weight = sum(neighbor_weights)
-                                                        if total_weight > 0:
-                                                            interpolated_prob = sum(p * w for p, w in zip(neighbor_probs, neighbor_weights)) / total_weight
-                                                            
-                                                            # Apply stronger decay based on distance from rod base
-                                                            decay_factor = max(0.2, 1.0 - (dist_from_base / rod_length) * 0.7)
-                                                            final_interpolated_prob = interpolated_prob * decay_factor
-                                                            
-                                                            if final_interpolated_prob > 0.02:  # Slightly lower threshold for interpolated values
-                                                                propagated_probabilities[node_idx] = final_interpolated_prob
-                    
-                    # Draw selection information with enhanced details
-                    # (This has been moved outside the map graph visuals block)
-
+            
             # Draw probability overlay nodes (INDEPENDENT of map graph visuals)
             if show_probability_overlay and node_probabilities and not show_combined_probability_mode:
                 # Merge base probabilities with extended probabilities from rotating rods
@@ -2278,7 +2157,6 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     if distance_diff > min_gap_distance:
                         # Record this gap line connecting the two successive ray endpoints
                         gap_lines.append((current_endpoint, next_endpoint, distance_diff))
-            
             # First priority: Show visibility gaps if enabled
             if show_agent2_visibility_gaps:
                 # First, use preprocessed visibility data to show visible map graph nodes
@@ -2345,10 +2223,10 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     # Choose base color based on gap orientation - using cyan/green for second agent's gaps
                     if is_near_to_far:
                         # Cyan for near-to-far transitions (expanding gaps)
-                        base_color = (0, 180, 255) if gap_size > 150 else (0, 200, 255) if gap_size > 80 else (0, 220, 255)
+                        base_color = (0, 200, 255) if gap_size > 150 else (0, 220, 255) if gap_size > 80 else (0, 240, 255)
                     elif is_far_to_near:
                         # Green-cyan for far-to-near transitions (contracting gaps)
-                        base_color = (0, 220, 180) if gap_size > 150 else (0, 240, 180) if gap_size > 80 else (0, 255, 180)
+                        base_color = (0, 240, 180) if gap_size > 150 else (0, 255, 180) if gap_size > 80 else (0, 255, 220)
                     else:
                         # Fallback color for equal distances (rare case)
                         base_color = (0, 200, 200)
@@ -2669,29 +2547,59 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
             # INSTANTANEOUS SWEEP-BASED PROBABILITY ASSIGNMENT FOR AGENT 2 (Independent section)
             # Can be enabled either globally via Y key (show_rotating_rods) or individually via J key (show_agent2_rods)
             if (show_rotating_rods or show_agent2_rods) and visibility_map and gap_lines:
-                # PERFORMANCE TIMING: High-precision timing for Phase 1 optimization
-                agent2_computation_start = time.perf_counter()
+                # PHASE 4B OPTIMIZATION: Selective computation - check if recomputation is needed
+                current_agent2_pos = (x2, y2)
+                current_agent2_angle = math.atan2(math.sin(theta2), math.cos(theta2))  # Normalize angle
                 
-                # Detailed timing breakdown variables
-                visibility_calculation_time = 0.0
-                gap_processing_time = 0.0
-                node_iteration_time = 0.0
-                
-                # Count operations for debugging
-                total_gaps_processed = 0
-                total_angles_processed = 0
-                total_nodes_checked = 0
+                # Check if we can skip computation based on agent state changes
+                if not agent2_optimizer.needs_recomputation(current_agent2_pos, current_agent2_angle):
+                    # Skip computation, use cached result
+                    agent2_gap_probabilities = agent2_optimizer.skip_computation()
+                    
+                    # Still need to do visual rendering, but skip the expensive computation
+                    # Set timing variables for consistency with logging
+                    agent2_computation_start = time.perf_counter()
+                    visibility_calculation_time = 0.0
+                    gap_processing_time = 0.0  
+                    node_iteration_time = 0.0
+                    total_gaps_processed = 0
+                    total_angles_processed = 0
+                    total_nodes_checked = 0
+                    total_probabilities_assigned = len(agent2_gap_probabilities)
+                    total_nodes_skipped = 0
+                    node_count = len(map_graph.nodes) if map_graph and map_graph.nodes else 0
+                    
+                    # Skip to visual rendering section (computation bypassed)
+                    computation_skipped = True
+                else:
+                    # Perform full computation
+                    computation_skipped = False
+                    
+                    # PERFORMANCE TIMING: High-precision timing for Phase 1 optimization
+                    agent2_computation_start = time.perf_counter()
+                    
+                    # Detailed timing breakdown variables
+                    visibility_calculation_time = 0.0
+                    gap_processing_time = 0.0
+                    node_iteration_time = 0.0
+                    
+                    # Count operations for debugging
+                    total_gaps_processed = 0
+                    total_angles_processed = 0
+                    total_nodes_checked = 0
                 total_probabilities_assigned = 0
                 total_nodes_skipped = 0  # Track nodes filtered out by spatial optimization
                 
                 # Track node count for performance analysis
                 node_count = len(map_graph.nodes) if map_graph and map_graph.nodes else 0
                 
-                # INSTANTANEOUS SWEEP: Process all angles at once to assign gap probabilities
-                agent2_gap_probabilities = {}  # Stores gap-based probabilities separate from visibility
-                
-                # Start timing gap processing
-                gap_processing_start = time.perf_counter()
+                # PHASE 4B OPTIMIZATION: Only perform expensive computation if not skipped
+                if not computation_skipped:
+                    # INSTANTANEOUS SWEEP: Process all angles at once to assign gap probabilities
+                    agent2_gap_probabilities = {}  # Stores gap-based probabilities separate from visibility
+                    
+                    # Start timing gap processing
+                    gap_processing_start = time.perf_counter()
                 
                 for start_point, end_point, gap_size in gap_lines:
                     # Only process significant gaps
@@ -2731,7 +2639,6 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         rotation_direction = 1   # Clockwise
                         gap_color = (0, 240, 180)  # Green-cyan tone
                     
-                    # Rod pivots at near point
                     rod_base = near_point
                     
                     # INSTANTANEOUS SWEEP: Calculate probabilities for all angles at once
@@ -2747,12 +2654,46 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         # Convert all nodes to NumPy arrays for vectorized operations
                         all_nodes = np.array(map_graph.nodes)
                         
-                        # Vectorized distance calculation to agent2
+                        # PHASE 4B OPTIMIZATION: Enhanced spatial filtering with multiple criteria
                         agent2_pos = np.array([x2, y2])
-                        distances_to_agent2 = np.linalg.norm(all_nodes - agent2_pos, axis=1)
                         
-                        # Boolean mask for nodes within vision range
-                        within_range_mask = distances_to_agent2 <= DEFAULT_VISION_RANGE
+                        # Primary filter: Distance-based (use fast squared distance)
+                        distances_squared = np.sum((all_nodes - agent2_pos)**2, axis=1)
+                        vision_range_squared = DEFAULT_VISION_RANGE * DEFAULT_VISION_RANGE
+                        within_range_mask = distances_squared <= vision_range_squared
+                        
+                        # Secondary filter: Gap-relevance filter (only consider nodes near gap direction)
+                        if len(all_nodes) > 100:  # Only apply for large node sets
+                            # Calculate gap center direction
+                            gap_center = np.array([(near_point[0] + far_point[0]) / 2, 
+                                                  (near_point[1] + far_point[1]) / 2])
+                            gap_direction = gap_center - agent2_pos
+                            gap_direction_norm = np.linalg.norm(gap_direction)
+                            
+                            if gap_direction_norm > 0:
+                                gap_direction = gap_direction / gap_direction_norm
+                                
+                                # Calculate angle between agent->node and agent->gap vectors
+                                node_directions = all_nodes - agent2_pos
+                                node_distances = np.linalg.norm(node_directions, axis=1)
+                                
+                                # Avoid division by zero
+                                valid_nodes_mask = node_distances > 1e-6
+                                
+                                if np.any(valid_nodes_mask):
+                                    node_directions_norm = node_directions[valid_nodes_mask] / node_distances[valid_nodes_mask, np.newaxis]
+                                    
+                                    # Dot product for angle calculation
+                                    dot_products = np.dot(node_directions_norm, gap_direction)
+                                    
+                                    # Keep nodes within ±60 degrees of gap direction
+                                    angle_threshold = math.cos(math.pi / 3)  # 60 degrees
+                                    gap_relevant_mask = np.zeros(len(all_nodes), dtype=bool)
+                                    gap_relevant_mask[valid_nodes_mask] = dot_products >= angle_threshold
+                                    
+                                    # Combine filters
+                                    within_range_mask = within_range_mask & gap_relevant_mask
+                        
                         within_range_indices = np.where(within_range_mask)[0]
                         within_range_nodes = all_nodes[within_range_mask]
                         
@@ -2841,6 +2782,9 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 gap_processing_end = time.perf_counter()
                 gap_processing_time = gap_processing_end - gap_processing_start
                 
+                # PHASE 4B OPTIMIZATION: Update optimizer state after computation
+                agent2_optimizer.update_state(current_agent2_pos, current_agent2_angle, agent2_gap_probabilities)
+                
                 # VISUAL REPRESENTATION: Draw static swept areas (no animation)
                 for start_point, end_point, gap_size in gap_lines:
                     # Only process significant gaps
@@ -2854,11 +2798,11 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     if start_dist < end_dist:
                         near_point = start_point
                         far_point = end_point
-                        is_cyan_gap = True
+                        is_cyan_gap = True  # Near-to-far (expanding)
                     else:
                         near_point = end_point
                         far_point = start_point
-                        is_cyan_gap = False
+                        is_cyan_gap = False  # Far-to-near (contracting)
                     
                     initial_rod_angle = math.atan2(far_point[1] - near_point[1], far_point[0] - near_point[0])
                     original_gap_rod_length = math.dist(near_point, far_point)
@@ -2892,9 +2836,10 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     for i in range(num_arc_points + 1):
                         t = i / num_arc_points
                         angle = sweep_start_angle + t * (sweep_end_angle - sweep_start_angle)
+                        # PHASE 4B OPTIMIZATION: Use fast trigonometric lookup
                         point = (
-                            rod_base[0] + rod_length * math.cos(angle),
-                            rod_base[1] + rod_length * math.sin(angle)
+                            rod_base[0] + rod_length * trig_lookup.fast_cos(angle),
+                            rod_base[1] + rod_length * trig_lookup.fast_sin(angle)
                         )
                         arc_points.append(point)
                     
@@ -2903,21 +2848,23 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     
                     # Draw the boundary lines of the swept area
                     boundary_color = (gap_color[0]//2, gap_color[1]//2, gap_color[2]//2)
+                    # PHASE 4B OPTIMIZATION: Use fast trigonometric lookup
                     start_boundary = (
-                        rod_base[0] + rod_length * math.cos(sweep_start_angle),
-                        rod_base[1] + rod_length * math.sin(sweep_start_angle)
+                        rod_base[0] + rod_length * trig_lookup.fast_cos(sweep_start_angle),
+                        rod_base[1] + rod_length * trig_lookup.fast_sin(sweep_start_angle)
                     )
                     end_boundary = (
-                        rod_base[0] + rod_length * math.cos(sweep_end_angle),
-                        rod_base[1] + rod_length * math.sin(sweep_end_angle)
+                        rod_base[0] + rod_length * trig_lookup.fast_cos(sweep_end_angle),
+                        rod_base[1] + rod_length * trig_lookup.fast_sin(sweep_end_angle)
                     )
                     pygame.draw.line(screen, boundary_color, rod_base, start_boundary, 2)
                     pygame.draw.line(screen, boundary_color, rod_base, end_boundary, 2)
                     
                     # Draw the gap line (initial rod position)
+                    # PHASE 4B OPTIMIZATION: Use fast trigonometric lookup
                     initial_rod_end = (
-                        rod_base[0] + rod_length * math.cos(initial_rod_angle),
-                        rod_base[1] + rod_length * math.sin(initial_rod_angle)
+                        rod_base[0] + rod_length * trig_lookup.fast_cos(initial_rod_angle),
+                        rod_base[1] + rod_length * trig_lookup.fast_sin(initial_rod_angle)
                     )
                     pygame.draw.line(screen, gap_color, rod_base, initial_rod_end, 3)
                 
@@ -2941,7 +2888,10 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 # Calculate current FPS
                 current_fps = clock.get_fps()
                 
-                # Log performance data to CSV for Phase 1 analysis
+                # PHASE 4B: Get selective computation statistics
+                optimizer_stats = agent2_optimizer.get_performance_stats()
+                
+                # Log performance data to CSV for Phase 4B analysis
                 performance_log_file = "agent2_performance_log.csv"
                 timestamp = datetime.now().isoformat()
                 
@@ -2954,13 +2904,15 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         writer.writerow([
                             'timestamp', 'total_time_ms', 'visibility_time_ms', 'gap_time_ms', 
                             'node_iteration_time_ms', 'node_count', 'fps', 'gaps_processed', 
-                            'angles_processed', 'nodes_checked', 'probabilities_assigned', 'nodes_skipped'
+                            'angles_processed', 'nodes_checked', 'probabilities_assigned', 'nodes_skipped',
+                            'computation_skipped', 'skip_rate_percent', 'optimizer_total_calls'
                         ])
                     
                     writer.writerow([
                         timestamp, total_time_ms, visibility_time_ms, gap_time_ms,
                         node_iteration_time_ms, node_count, current_fps, total_gaps_processed,
-                        total_angles_processed, total_nodes_checked, total_probabilities_assigned, total_nodes_skipped
+                        total_angles_processed, total_nodes_checked, total_probabilities_assigned, total_nodes_skipped,
+                        computation_skipped, optimizer_stats['skip_rate_percent'], optimizer_stats['total_calls']
                     ])
                 
                 # Store computation time for FPS display (maintain backward compatibility)
@@ -3022,5 +2974,86 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
     pygame.quit()
     sys.exit()
 
-if __name__ == "__main__":
-    run_environment_inspection()
+# PHASE 4B OPTIMIZATION: Agent2ComputationOptimizer for selective computation
+class Agent2ComputationOptimizer:
+    """
+    Phase 4B optimization: Selective computation system to avoid unnecessary recomputations
+    when agent state hasn't changed significantly.
+    """
+    def __init__(self):
+        self.last_position = None
+        self.last_angle = None
+        self.last_result = None
+        self.last_gap_probabilities = None
+        
+        # Configurable thresholds for detecting significant changes
+        self.position_threshold = 5.0  # pixels - recompute if agent moves >5px
+        self.angle_threshold = 0.1     # radians (~5.7 degrees) - recompute if angle changes significantly
+        
+        # Performance tracking
+        self.computation_skipped = 0
+        self.computation_performed = 0
+        
+        # Cache invalidation tracking
+        self.frames_since_last_computation = 0
+        self.max_frames_without_computation = 30  # Force recomputation every 30 frames max
+    
+    def needs_recomputation(self, current_pos, current_angle):
+        """
+        Determine if Agent2 computation needs to be performed based on state changes.
+        
+        Args:
+            current_pos: Current agent position (x, y)
+            current_angle: Current agent angle in radians
+            
+        Returns:
+            bool: True if recomputation is needed, False if cached result can be used
+        """
+        # Always compute on first run
+        if self.last_position is None:
+            return True
+            
+        # Force recomputation after max frames to prevent stale data
+        if self.frames_since_last_computation >= self.max_frames_without_computation:
+            return True
+        
+        # Check position change
+        pos_delta = math.sqrt((current_pos[0] - self.last_position[0])**2 + 
+                             (current_pos[1] - self.last_position[1])**2)
+        
+        # Check angle change
+        angle_delta = abs(current_angle - self.last_angle)
+        # Handle angle wraparound (e.g., from 359° to 1°)
+        angle_delta = min(angle_delta, 2*math.pi - angle_delta)
+        
+        return (pos_delta > self.position_threshold or 
+                angle_delta > self.angle_threshold)
+    
+    def update_state(self, position, angle, gap_probabilities):
+        """Update cached state after computation"""
+        self.last_position = position
+        self.last_angle = angle
+        self.last_gap_probabilities = gap_probabilities.copy() if gap_probabilities else {}
+        self.computation_performed += 1
+        self.frames_since_last_computation = 0
+    
+    def skip_computation(self):
+        """Record that computation was skipped and return cached result"""
+        self.computation_skipped += 1
+        self.frames_since_last_computation += 1
+        return self.last_gap_probabilities if self.last_gap_probabilities else {}
+    
+    def get_performance_stats(self):
+        """Get performance statistics for monitoring"""
+        total_calls = self.computation_performed + self.computation_skipped
+        skip_rate = self.computation_skipped / total_calls if total_calls > 0 else 0
+        return {
+            'total_calls': total_calls,
+            'computations_performed': self.computation_performed,
+            'computations_skipped': self.computation_skipped,
+            'skip_rate_percent': skip_rate * 100,
+            'frames_since_last': self.frames_since_last_computation
+        }
+
+# Global instance for Agent2 computation optimization
+agent2_optimizer = Agent2ComputationOptimizer()
