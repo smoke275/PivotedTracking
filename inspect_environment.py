@@ -133,11 +133,14 @@ if __name__ == "__main__":
     print("       Purple-yellow color scheme: low to high combined probability")
     print("       Auto-enables both agent probability overlays when activated")
     print("    Z: Auto-enable agent 1 features (F+O+B+Y+H) - Simplified shortcut")
+    print("    X: Complete dual-agent system (Z+G+M) - Ultimate visualization mode")
+    print("       Combines: Agent 1 features + Map graph + Combined probability mode")
     print("    +/=: Increase time horizon | -: Decrease time horizon")
     print("    ESC: Quit the application")
     print("")
     print("  Prerequisites for Rotating Rods: 1) Visibility data (V/L) 2) Select node 3) Prob overlay (O) 4) Press Y")
     print("  Quick Start: Press Z to enable agent 1 features (F+O+B+Y+H) in one step")
+    print("  Ultimate Mode: Press X for complete dual-agent system (Z+G+M) - All features enabled!")
     
     # Advanced options information
     if args.analyze_on_start or args.load_visibility or args.no_cache or args.no_auto_load:

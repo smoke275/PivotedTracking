@@ -920,6 +920,89 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         else:
                             print("Combined probability mode: OFF")
                             print("  Individual probability overlays restored")
+                    elif event.key == pygame.K_x:
+                        # X key: Combined Z+G+M functionality (Auto-enable complete dual-agent system)
+                        print("X: Activating complete dual-agent visualization system (Z+G+M)...")
+                        
+                        # 1. Execute Z key functionality: Auto-enable agent 1 features (F+O+B+Y+H)
+                        print("Step 1/3: Enabling agent 1 features (F+O+B+Y+H)...")
+                        
+                        # Enable agent-following mode (F key)
+                        if not follow_agent_mode:
+                            follow_agent_mode = True
+                            print("  ✓ Agent-following: ON")
+                            # Initialize agent position tracking
+                            agent_last_position = (agent.state[0], agent.state[1])
+                            # Find closest node to current agent position
+                            agent_pos = (agent.state[0], agent.state[1])
+                            agent_following_node_index = find_closest_node(map_graph.nodes, agent_pos)
+                            if agent_following_node_index is not None and visibility_map:
+                                selected_node_index = agent_following_node_index
+                                print(f"    Following at node {selected_node_index}")
+                        else:
+                            print("  ✓ Agent-following: Already ON")
+                        
+                        # Enable probability overlay (O key)
+                        if not show_probability_overlay:
+                            show_probability_overlay = True
+                            print("  ✓ Probability overlay: ON")
+                        else:
+                            print("  ✓ Probability overlay: Already ON")
+                        
+                        # Enable visibility gaps display (B key)
+                        if not show_visibility_gaps:
+                            show_visibility_gaps = True
+                            print("  ✓ Visibility gaps: ON")
+                        else:
+                            print("  ✓ Visibility gaps: Already ON")
+                        
+                        # Enable rotating rods display (Y key)
+                        if not show_rotating_rods:
+                            show_rotating_rods = True
+                            print("  ✓ Rotating rods: ON")
+                        else:
+                            print("  ✓ Rotating rods: Already ON")
+                        
+                        # Enable extended probability set (H key)
+                        if not show_extended_probability_set:
+                            show_extended_probability_set = True
+                            print("  ✓ Extended probability set: ON")
+                        else:
+                            print("  ✓ Extended probability set: Already ON")
+                        
+                        # 2. Execute G key functionality: Enable map graph visuals
+                        print("Step 2/3: Enabling map graph display...")
+                        if not show_map_graph_visuals:
+                            show_map_graph_visuals = True
+                            print("  ✓ Map graph visuals: ON")
+                        else:
+                            print("  ✓ Map graph visuals: Already ON")
+                        
+                        # 3. Execute M key functionality: Enable combined probability mode
+                        print("Step 3/3: Enabling combined probability mode...")
+                        if not show_combined_probability_mode:
+                            show_combined_probability_mode = True
+                            print("  ✓ Combined probability mode: ON")
+                            print("    Multiplying Agent 1 and Agent 2 probabilities")
+                            print("    Purple-yellow color scheme: low to high combined probability")
+                            # Auto-enable required modes for both agents
+                            if not show_agent2_probability_overlay:
+                                show_agent2_probability_overlay = True
+                                show_agent2_rods = True
+                                print("    Auto-enabled Agent 2 probability overlay")
+                        else:
+                            print("  ✓ Combined probability mode: Already ON")
+                        
+                        # Final status check
+                        print("\n🎯 COMPLETE DUAL-AGENT SYSTEM ACTIVATED! 🎯")
+                        if not visibility_map:
+                            print("⚠ Warning: No visibility data. Press V to analyze or L to load.")
+                        elif selected_node_index is None or selected_node_index not in visibility_map:
+                            print("⚠ Warning: No valid node selected. Move agent or click on a node.")
+                        else:
+                            print("✅ All systems operational! Use arrow keys to move and observe the complete visualization.")
+                        
+                        print("Features active: Agent following + Probability overlays + Visibility gaps + Rotating rods + Map graph + Combined probability mode")
                     elif event.key == pygame.K_PLUS or event.key == pygame.K_EQUALS:
                         # Increase time horizon
                         if show_probability_overlay:
