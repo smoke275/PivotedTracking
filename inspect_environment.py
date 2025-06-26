@@ -63,7 +63,7 @@ def parse_arguments():
     return parser.parse_args()
 
 if __name__ == "__main__":
-    # jarse command line arguments
+    # Parse command line arguments
     args = parse_arguments()
     
     # Handle the single-core flag (overrides multicore)
@@ -120,10 +120,12 @@ if __name__ == "__main__":
     print("    O: Toggle probability overlay (light blue-red color blend, colors nodes based on reachability within time horizon)")
     print("    B: Toggle visibility gaps for first agent (ray casting discontinuities)")
     print("       Blue: Near-to-far transitions, Violet: Far-to-near transitions")
-    print("    J: Toggle probability overlay for second agent (pink-green blend, 800px visibility circle)")
+    print("    J: Toggle probability overlay for second agent (pink-green blend, dynamic visibility circle)")
+    print("       Range: Agent 1 reachability + inter-agent distance (max 800px)")
     print("       Visibility-based probability: config value for visible nodes, 0 for non-visible")
     print("       Automatically enables rotating rods visualization for agent 2")
-    print("    K: Toggle visibility indicators for second agent (camera range: 800px)")
+    print("    K: Toggle visibility indicators for second agent (dynamic camera range)")
+    print("       Range: Agent 1 reachability + inter-agent distance (max 800px)")
     print("       Cyan: Near-to-far transitions, Green-cyan: Far-to-near transitions")
     print("    H: Toggle extended probability set for agent 1 (gap arcs vs green visibility lines)")
     print("    Y: Toggle rotating rods (needs: visibility data + node + probability ON)")

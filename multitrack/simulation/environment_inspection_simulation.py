@@ -799,7 +799,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         # Toggle probability overlay for second agent
                         show_agent2_probability_overlay = not show_agent2_probability_overlay
                         if show_agent2_probability_overlay:
-                            print("Agent 2 probability: ON - Pink-green blend, visibility-based 800px range")
+                            print("Agent 2 probability: ON - Pink-green blend, dynamic visibility range")
                             # Automatically turn off visibility gaps when enabling probability overlay
                             show_agent2_visibility_gaps = False
                             # Automatically show rotating rods for agent 2
@@ -813,7 +813,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         # Toggle visibility gaps display for second agent
                         show_agent2_visibility_gaps = not show_agent2_visibility_gaps
                         if show_agent2_visibility_gaps:
-                            print("Agent 2 visibility: ON - Cyan gaps and 800px range circle")
+                            print("Agent 2 visibility: ON - Cyan gaps and dynamic range circle")
                             # Automatically turn off probability overlay when enabling visibility gaps
                             show_agent2_probability_overlay = False
                             # Turn off agent 2's rods when enabling visibility gaps
@@ -1402,8 +1402,8 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 "F: Toggle agent-following mode",
                 f"O: Toggle prob overlay {'(ON)' if show_probability_overlay else '(OFF)'} - needs visibility, light blue-red blend",
                 f"B: Toggle 1st agent gaps {'(ON)' if show_visibility_gaps else '(OFF)'} - blue/violet",
-                f"J: 2nd agent prob {'(ON)' if show_agent2_probability_overlay else '(OFF)'} - visibility-based 800px range, pink-green blend",
-                f"K: 2nd agent visibility {'(ON)' if show_agent2_visibility_gaps else '(OFF)'} - cyan/green, 800px",
+                f"J: 2nd agent prob {'(ON)' if show_agent2_probability_overlay else '(OFF)'} - dynamic visibility range, pink-green blend",
+                f"K: 2nd agent visibility {'(ON)' if show_agent2_visibility_gaps else '(OFF)'} - cyan/green, dynamic range",
                 f"Y: Rotating rods {'(ON)' if show_rotating_rods else '(OFF)'} - shows gap arcs",
             ]
             
@@ -2342,8 +2342,14 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 # Visibility-based probability propagation for agent 2
                 agent2_x, agent2_y = agent2.state[0], agent2.state[1]
                 
-                # Use DEFAULT_VISION_RANGE from config (800px - same as camera visibility range)
-                agent2_vision_range = DEFAULT_VISION_RANGE
+                # DYNAMIC RANGE CALCULATION: Agent 1 reachability + inter-agent distance (max 800px)
+                agent1_x, agent1_y = x, y  # Agent 1 position
+                agent1_reachability = time_horizon * LEADER_LINEAR_VEL  # Agent 1's reachable distance
+                inter_agent_distance = math.dist((agent1_x, agent1_y), (agent2_x, agent2_y))
+                
+                # Calculate dynamic vision range: reachability + distance between agents, capped at 800
+                dynamic_vision_range = min(agent1_reachability + inter_agent_distance, DEFAULT_VISION_RANGE)
+                agent2_vision_range = dynamic_vision_range
                 
                 # Initialize agent 2 probability list/dictionary (similar to agent 1)
                 agent2_node_probabilities = {}
@@ -2478,7 +2484,14 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 if show_agent2_probability_overlay and map_graph:
                     # Calculate Agent 2 visibility-based probabilities
                     agent2_x, agent2_y = agent2.state[0], agent2.state[1]
-                    agent2_vision_range = DEFAULT_VISION_RANGE
+                    
+                    # DYNAMIC RANGE CALCULATION: Agent 1 reachability + inter-agent distance (max 800px)
+                    agent1_x, agent1_y = x, y  # Agent 1 position
+                    agent1_reachability = time_horizon * LEADER_LINEAR_VEL  # Agent 1's reachable distance
+                    inter_agent_distance = math.dist((agent1_x, agent1_y), (agent2_x, agent2_y))
+                    
+                    # Calculate dynamic vision range: reachability + distance between agents, capped at 800
+                    agent2_vision_range = min(agent1_reachability + inter_agent_distance, DEFAULT_VISION_RANGE)
                     
                     if visibility_map:
                         agent2_pos = (agent2_x, agent2_y)
@@ -2561,9 +2574,14 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     agent1_circle_color = (100, 150, 255)
                     pygame.draw.circle(screen, agent1_circle_color, (int(x), int(y)), int(max_reachable_distance), 1)
                     
-                    # Agent 2 visibility circle (faint cyan)
+                    # Agent 2 dynamic visibility circle (faint cyan)
+                    # Calculate dynamic range for Agent 2
+                    agent1_reachability = time_horizon * LEADER_LINEAR_VEL
+                    inter_agent_distance = math.dist((x, y), (agent2_x, agent2_y))
+                    agent2_dynamic_range = min(agent1_reachability + inter_agent_distance, DEFAULT_VISION_RANGE)
+                    
                     agent2_circle_color = (0, 150, 150)
-                    pygame.draw.circle(screen, agent2_circle_color, (int(agent2_x), int(agent2_y)), DEFAULT_VISION_RANGE, 1)
+                    pygame.draw.circle(screen, agent2_circle_color, (int(agent2_x), int(agent2_y)), int(agent2_dynamic_range), 1)
                 
                 # Display combined mode info
                 info_text = [
@@ -2613,8 +2631,13 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
             
             # Draw visibility range circle for the second agent (escort)
             if show_agent2_visibility_gaps:
-                # Use DEFAULT_VISION_RANGE from config instead of MAP_GRAPH_VISIBILITY_RANGE
-                escort_visibility_range = DEFAULT_VISION_RANGE  # 800 pixels - typical camera range for escort
+                # DYNAMIC RANGE CALCULATION: Agent 1 reachability + inter-agent distance (max 800px)
+                agent1_x, agent1_y = x, y  # Agent 1 position
+                agent1_reachability = time_horizon * LEADER_LINEAR_VEL  # Agent 1's reachable distance
+                inter_agent_distance = math.dist((agent1_x, agent1_y), (x2, y2))
+                
+                # Calculate dynamic vision range: reachability + distance between agents, capped at 800
+                escort_visibility_range = min(agent1_reachability + inter_agent_distance, DEFAULT_VISION_RANGE)
                 escort_circle_color = (0, 255, 255)  # Bright cyan color for second agent
                 
                 # Create pulsing effect for the second agent's circle
@@ -2630,6 +2653,14 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
             # INSTANTANEOUS SWEEP-BASED PROBABILITY ASSIGNMENT FOR AGENT 2 (Independent section)
             # Can be enabled either globally via Y key (show_rotating_rods) or individually via J key (show_agent2_rods)
             if (show_rotating_rods or show_agent2_rods) and visibility_map and gap_lines:
+                # DYNAMIC RANGE CALCULATION: Agent 1 reachability + inter-agent distance (max 800px)
+                agent1_x, agent1_y = x, y  # Agent 1 position
+                agent1_reachability = time_horizon * LEADER_LINEAR_VEL  # Agent 1's reachable distance
+                inter_agent_distance = math.dist((agent1_x, agent1_y), (x2, y2))
+                
+                # Calculate dynamic vision range: reachability + distance between agents, capped at 800
+                agent2_dynamic_vision_range = min(agent1_reachability + inter_agent_distance, DEFAULT_VISION_RANGE)
+                
                 # PHASE 4B OPTIMIZATION: Selective computation - check if recomputation is needed
                 current_agent2_pos = (x2, y2)
                 current_agent2_angle = math.atan2(math.sin(theta2), math.cos(theta2))  # Normalize angle
@@ -2742,7 +2773,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         
                         # Primary filter: Distance-based (use fast squared distance)
                         distances_squared = np.sum((all_nodes - agent2_pos)**2, axis=1)
-                        vision_range_squared = DEFAULT_VISION_RANGE * DEFAULT_VISION_RANGE
+                        vision_range_squared = agent2_dynamic_vision_range * agent2_dynamic_vision_range
                         within_range_mask = distances_squared <= vision_range_squared
                         
                         # Secondary filter: Gap-relevance filter (only consider nodes near gap direction)
