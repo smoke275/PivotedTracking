@@ -54,3 +54,7 @@ graph_visibility_cache.pkl
 # Agent state files (dual agent implementation)
 multitrack/simulation/agent_state.pkl
 multitrack/simulation/agent2_state.pkl
+
+# Performance logs and optimization data
+agent2_performance_log.csv
+docs/optimization/agent2_performance_log.csv
