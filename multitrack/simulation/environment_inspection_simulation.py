@@ -521,7 +521,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
     
     # Initialize threat classification mode
     show_threat_classification = False
-    threat_threshold = 0.3  # Configurable threshold for threat classification
+    threat_threshold = 0.1  # Same threshold as combined probability visualization (was 0.3)
     
     # Time horizon parameters for probability overlay
     time_horizon = 4.0  # Look-ahead time in seconds
@@ -2633,7 +2633,8 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                                 }
                         
                         # Store for regular combined probability visualization (if enabled)
-                        if combined_prob >= 0.1:
+                        # Use consistent threshold for both visualization and threat classification
+                        if combined_prob >= threat_threshold:
                             combined_probabilities[node_idx] = combined_prob
                 
                 # THREAT VISUALIZATION: Draw threat nodes with rod-based colors
@@ -2681,8 +2682,15 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         pygame.draw.circle(screen, color, (node_x, node_y), node_size)
                         pygame.draw.circle(screen, (255, 255, 255), (node_x, node_y), node_size + 1, 1)
                 
-                # Draw combined probability nodes with purple-yellow color scheme (if no threats shown)
-                if not threat_nodes:  # Only show combined probabilities if no threat classification
+                # Draw combined probability nodes with purple-yellow color scheme
+                # When threat classification is enabled, all combined probability nodes become threats
+                # When threat classification is disabled, show all combined probability nodes normally
+                if show_threat_classification:
+                    # With consistent thresholds, all combined_probabilities nodes are now classified as threats
+                    # No separate visualization needed - all nodes shown as rod-based or visibility-based threats
+                    pass
+                else:
+                    # Threat classification disabled - show all combined probabilities normally
                     for node_idx, combined_prob in combined_probabilities.items():
                         node_x, node_y = map_graph.nodes[node_idx]
                         
@@ -2718,40 +2726,6 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                             glow_color = (255, 255, 150)  # Bright yellow glow
                             glow_size = node_size + 2
                             pygame.draw.circle(screen, glow_color, (node_x, node_y), glow_size)
-                    node_x, node_y = map_graph.nodes[node_idx]
-                    
-                    # Purple-yellow color scheme: purple (low) to yellow (high)
-                    # Low probability: dark purple, High probability: bright yellow
-                    purple_color = (128, 0, 128)  # Dark purple
-                    yellow_color = (255, 255, 0)  # Bright yellow
-                    
-                    # Normalize combined probability for color blending (0.0 to 1.0)
-                    # Since we multiply probabilities, the range is typically much smaller
-                    # Use a scaling factor to make the visualization more visible
-                    display_prob = min(1.0, combined_prob * 10)  # Scale up for better visibility
-                    
-                    # Color blending
-                    yellow_weight = display_prob
-                    purple_weight = 1.0 - display_prob
-                    
-                    red = int(purple_color[0] * purple_weight + yellow_color[0] * yellow_weight)
-                    green = int(purple_color[1] * purple_weight + yellow_color[1] * yellow_weight)
-                    blue = int(purple_color[2] * purple_weight + yellow_color[2] * yellow_weight)
-                    
-                    color = (red, green, blue)
-                    
-                    # Node size based on combined probability (larger for higher probability)
-                    min_size, max_size = 3, 7  # Slightly larger than individual modes
-                    node_size = int(min_size + display_prob * (max_size - min_size))
-                    
-                    # Draw the combined probability node
-                    pygame.draw.circle(screen, color, (node_x, node_y), node_size)
-                    
-                    # Add glow effect for very high combined probabilities
-                    if display_prob > 0.8:
-                        glow_color = (255, 255, 150)  # Bright yellow glow
-                        glow_size = node_size + 2
-                        pygame.draw.circle(screen, glow_color, (node_x, node_y), glow_size)
                 
                 # Draw both agents' visibility ranges for reference
                 if map_graph:
