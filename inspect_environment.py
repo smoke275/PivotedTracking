@@ -134,6 +134,8 @@ if __name__ == "__main__":
     print("    M: Toggle combined probability mode (multiply Agent 1 & Agent 2 probabilities)")
     print("       Purple-yellow color scheme: low to high combined probability")
     print("       Auto-enables both agent probability overlays when activated")
+    print("    I: Toggle probability overlay (requires combined mode to be enabled)")
+    print("       Shows live histogram of combined probability distribution on screen")
     print("    U: Toggle threat classification mode (rod-based threat analysis)")
     print("       Classifies threats by which rod sweep created them using different colors")
     print("       Thresholds combined probability space into 'threat' vs 'not threat'")

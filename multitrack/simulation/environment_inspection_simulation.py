@@ -20,6 +20,14 @@ from multitrack.utils.map_graph import MapGraph
 from multitrack.utils.pathfinding import find_shortest_path, calculate_path_length, smooth_path, create_dynamically_feasible_path, find_closest_node
 from multitrack.utils.optimize_path import optimize_path_with_visibility
 
+# Import probability overlay for in-game visualization
+try:
+    import probability_overlay
+    OVERLAY_AVAILABLE = True
+except ImportError:
+    OVERLAY_AVAILABLE = False
+    print("Warning: probability_overlay module not available. Overlay functionality disabled.")
+
 # PHASE 4B OPTIMIZATION: Agent2ComputationOptimizer for selective computation
 class Agent2ComputationOptimizer:
     """
@@ -1043,6 +1051,19 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                             print(f"Time horizon: {time_horizon:.1f}s (max reach: {time_horizon * LEADER_LINEAR_VEL:.0f} pixels)")
                         else:
                             print("Enable probability overlay (O) to adjust time horizon")
+                    elif event.key == pygame.K_i:
+                        # I key: Toggle probability overlay
+                        if OVERLAY_AVAILABLE:
+                            if show_combined_probability_mode:
+                                overlay_enabled = probability_overlay.toggle_probability_overlay()
+                                print(f"Probability overlay: {'ON' if overlay_enabled else 'OFF'}")
+                                if overlay_enabled:
+                                    print("Overlay will show combined probability distribution in real-time")
+                            else:
+                                print("Enable combined probability mode (M key) first to show overlay.")
+                        else:
+                            print("Overlay functionality not available.")
+
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     if event.button == 1 and map_graph_enabled:  # Left mouse button
                         # Get mouse position
@@ -3241,6 +3262,10 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
             label_bg2.set_alpha(180)
             screen.blit(label_bg2, (int(x2) - label_text2.get_width()//2 - 2, int(y2) - AGENT_RADIUS - 20))
             screen.blit(label_text2, (int(x2) - label_text2.get_width()//2, int(y2) - AGENT_RADIUS - 19))
+
+            # Draw probability overlay if enabled and data is available
+            if OVERLAY_AVAILABLE and show_combined_probability_mode and 'combined_probabilities' in locals() and combined_probabilities:
+                probability_overlay.draw_probability_overlay(screen, combined_probabilities)
 
             # Update the display
             pygame.display.flip()
