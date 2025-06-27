@@ -511,6 +511,10 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
     # Initialize combined probability mode (multiply Agent 1 and Agent 2 probabilities)
     show_combined_probability_mode = False
     
+    # Initialize threat classification mode
+    show_threat_classification = False
+    threat_threshold = 0.3  # Configurable threshold for threat classification
+    
     # Time horizon parameters for probability overlay
     time_horizon = 4.0  # Look-ahead time in seconds
     min_time_horizon = 0.5  # Minimum time horizon
@@ -920,6 +924,28 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         else:
                             print("Combined probability mode: OFF")
                             print("  Individual probability overlays restored")
+                    elif event.key == pygame.K_u:
+                        # U key: Toggle threat classification mode
+                        show_threat_classification = not show_threat_classification if 'show_threat_classification' in locals() else True
+                        if show_threat_classification:
+                            print("Threat classification mode: ON")
+                            print("  Rod-based threat analysis with color coding")
+                            print(f"  Threat threshold: {threat_threshold:.2f}")
+                            print("  Rod colors: Red, Green, Blue, Orange, Magenta, Cyan, Yellow, Purple")
+                            print("  White nodes: Visibility-only threats (no rod involvement)")
+                            print("  Multiple small dots: Overlapping rod contributions")
+                            # Auto-enable required modes
+                            if not show_combined_probability_mode:
+                                show_combined_probability_mode = True
+                                print("  Auto-enabled combined probability mode")
+                            if not show_agent2_probability_overlay:
+                                show_agent2_probability_overlay = True
+                                show_agent2_rods = True
+                                print("  Auto-enabled Agent 2 probability overlay and rods")
+                        else:
+                            show_threat_classification = False
+                            print("Threat classification mode: OFF")
+                            print("  Restored standard combined probability visualization")
                     elif event.key == pygame.K_x:
                         # X key: Combined Z+G+M functionality (Auto-enable complete dual-agent system)
                         print("X: Activating complete dual-agent visualization system (Z+G+M)...")
@@ -1405,6 +1431,8 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 f"J: 2nd agent prob {'(ON)' if show_agent2_probability_overlay else '(OFF)'} - dynamic visibility range, pink-green blend",
                 f"K: 2nd agent visibility {'(ON)' if show_agent2_visibility_gaps else '(OFF)'} - cyan/green, dynamic range",
                 f"Y: Rotating rods {'(ON)' if show_rotating_rods else '(OFF)'} - shows gap arcs",
+                f"M: Combined mode {'(ON)' if show_combined_probability_mode else '(OFF)'} - multiply probabilities",
+                f"U: Threat classification {'(ON)' if show_threat_classification else '(OFF)'} - rod-based threat analysis",
             ]
             
             # Add time horizon info when probability overlay is enabled
@@ -2518,6 +2546,40 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 # Calculate combined probabilities (multiplication)
                 all_node_indices = set(agent1_probabilities.keys()) | set(agent2_probabilities.keys())
                 
+                # THREAT CLASSIFICATION SYSTEM: Threshold and rod-based threat analysis
+                # (Only when threat classification mode is enabled)
+                threat_nodes = {}  # Store threat nodes with their rod source information
+                
+                if show_threat_classification:
+                    rod_colors = [
+                        (255, 0, 0),    # Red - Rod 1
+                        (0, 255, 0),    # Green - Rod 2  
+                        (0, 0, 255),    # Blue - Rod 3
+                        (255, 165, 0),  # Orange - Rod 4
+                        (255, 0, 255),  # Magenta - Rod 5
+                        (0, 255, 255),  # Cyan - Rod 6
+                        (255, 255, 0),  # Yellow - Rod 7
+                        (128, 0, 128),  # Purple - Rod 8
+                    ]
+                
+                # Track rod-based threats from Agent 2 gap probabilities
+                if show_threat_classification:
+                    node_rod_sources = {}  # Map node_index -> list of (rod_id, probability)
+                    
+                    if 'agent2_rod_node_mapping' in locals() and agent2_rod_node_mapping:
+                        # Use the proper rod tracking from gap processing
+                        node_rod_sources = agent2_rod_node_mapping
+                    elif 'agent2_gap_probabilities' in locals() and agent2_gap_probabilities:
+                        # Fallback: assign rod IDs based on gap processing order (less accurate)
+                        rod_id = 0
+                        for node_index, gap_prob in agent2_gap_probabilities.items():
+                            if node_index not in node_rod_sources:
+                                node_rod_sources[node_index] = []
+                            
+                            current_rod_id = rod_id % len(rod_colors)
+                            node_rod_sources[node_index].append((current_rod_id, gap_prob))
+                            rod_id += 1
+                
                 for node_idx in all_node_indices:
                     prob1 = agent1_probabilities.get(node_idx, 0.0)
                     prob2 = agent2_probabilities.get(node_idx, 0.0)
@@ -2526,12 +2588,115 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     if prob1 > 0 and prob2 > 0:
                         combined_prob = prob1 * prob2
                         
-                        # Only store if combined probability is significant (>= 0.1 threshold)
+                        # THREAT CLASSIFICATION: Check if above threshold (only when enabled)
+                        if show_threat_classification and combined_prob >= threat_threshold:
+                            # This is a threat node - classify by rod source
+                            rod_sources = node_rod_sources.get(node_idx, []) if 'node_rod_sources' in locals() else []
+                            
+                            if rod_sources:
+                                # Node has rod-based sources - classify by dominant rod
+                                dominant_rod = max(rod_sources, key=lambda x: x[1])  # Highest probability rod
+                                threat_nodes[node_idx] = {
+                                    'probability': combined_prob,
+                                    'rod_id': dominant_rod[0],
+                                    'all_rods': rod_sources,
+                                    'type': 'rod_based'
+                                }
+                            else:
+                                # Threat from visibility only (no rod involvement)
+                                threat_nodes[node_idx] = {
+                                    'probability': combined_prob,
+                                    'rod_id': None,
+                                    'all_rods': [],
+                                    'type': 'visibility_only'
+                                }
+                        
+                        # Store for regular combined probability visualization (if enabled)
                         if combined_prob >= 0.1:
                             combined_probabilities[node_idx] = combined_prob
                 
-                # Draw combined probability nodes with purple-yellow color scheme
-                for node_idx, combined_prob in combined_probabilities.items():
+                # THREAT VISUALIZATION: Draw threat nodes with rod-based colors
+                for node_idx, threat_info in threat_nodes.items():
+                    node_x, node_y = map_graph.nodes[node_idx]
+                    
+                    if threat_info['type'] == 'rod_based' and threat_info['rod_id'] is not None:
+                        # Rod-based threat - use rod color
+                        rod_id = threat_info['rod_id']
+                        base_color = rod_colors[rod_id % len(rod_colors)]
+                        
+                        # Intensity based on probability (above threshold)
+                        prob_normalized = min(1.0, (threat_info['probability'] - threat_threshold) / (1.0 - threat_threshold))
+                        intensity = 0.5 + 0.5 * prob_normalized  # 50% to 100% intensity
+                        
+                        color = tuple(int(c * intensity) for c in base_color)
+                        
+                        # Larger size for threats
+                        node_size = 6 + int(prob_normalized * 4)  # 6-10 pixels
+                        
+                        # Draw threat node
+                        pygame.draw.circle(screen, color, (node_x, node_y), node_size)
+                        
+                        # Draw outline to show it's a threat
+                        pygame.draw.circle(screen, (255, 255, 255), (node_x, node_y), node_size + 1, 1)
+                        
+                        # Handle overlapping rods - draw small indicators
+                        if len(threat_info['all_rods']) > 1:
+                            # Multiple rods contribute - draw small dots around the main node
+                            angle_step = 2 * math.pi / len(threat_info['all_rods'])
+                            for i, (rod_id, _) in enumerate(threat_info['all_rods']):
+                                angle = i * angle_step
+                                offset_x = int(node_x + (node_size + 3) * math.cos(angle))
+                                offset_y = int(node_y + (node_size + 3) * math.sin(angle))
+                                rod_color = rod_colors[rod_id % len(rod_colors)]
+                                pygame.draw.circle(screen, rod_color, (offset_x, offset_y), 2)
+                    
+                    elif threat_info['type'] == 'visibility_only':
+                        # Visibility-based threat (no rod involvement) - use white/gray
+                        prob_normalized = min(1.0, (threat_info['probability'] - threat_threshold) / (1.0 - threat_threshold))
+                        intensity = int(128 + 127 * prob_normalized)  # Gray to white
+                        color = (intensity, intensity, intensity)
+                        
+                        node_size = 6 + int(prob_normalized * 4)
+                        pygame.draw.circle(screen, color, (node_x, node_y), node_size)
+                        pygame.draw.circle(screen, (255, 255, 255), (node_x, node_y), node_size + 1, 1)
+                
+                # Draw combined probability nodes with purple-yellow color scheme (if no threats shown)
+                if not threat_nodes:  # Only show combined probabilities if no threat classification
+                    for node_idx, combined_prob in combined_probabilities.items():
+                        node_x, node_y = map_graph.nodes[node_idx]
+                        
+                        # Purple-yellow color scheme: purple (low) to yellow (high)
+                        # Low probability: dark purple, High probability: bright yellow
+                        purple_color = (128, 0, 128)  # Dark purple
+                        yellow_color = (255, 255, 0)  # Bright yellow
+                        
+                        # Normalize combined probability for color blending (0.0 to 1.0)
+                        # Since we multiply probabilities, the range is typically much smaller
+                        # Use a scaling factor to make the visualization more visible
+                        display_prob = min(1.0, combined_prob * 10)  # Scale up for better visibility
+                        
+                        # Color blending
+                        yellow_weight = display_prob
+                        purple_weight = 1.0 - display_prob
+                        
+                        red = int(purple_color[0] * purple_weight + yellow_color[0] * yellow_weight)
+                        green = int(purple_color[1] * purple_weight + yellow_color[1] * yellow_weight)
+                        blue = int(purple_color[2] * purple_weight + yellow_color[2] * yellow_weight)
+                        
+                        color = (red, green, blue)
+                        
+                        # Node size based on combined probability (larger for higher probability)
+                        min_size, max_size = 3, 7  # Slightly larger than individual modes
+                        node_size = int(min_size + display_prob * (max_size - min_size))
+                        
+                        # Draw the combined probability node
+                        pygame.draw.circle(screen, color, (node_x, node_y), node_size)
+                        
+                        # Add glow effect for very high combined probabilities
+                        if display_prob > 0.8:
+                            glow_color = (255, 255, 150)  # Bright yellow glow
+                            glow_size = node_size + 2
+                            pygame.draw.circle(screen, glow_color, (node_x, node_y), glow_size)
                     node_x, node_y = map_graph.nodes[node_idx]
                     
                     # Purple-yellow color scheme: purple (low) to yellow (high)
@@ -2711,10 +2876,12 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 if not computation_skipped:
                     # INSTANTANEOUS SWEEP: Process all angles at once to assign gap probabilities
                     agent2_gap_probabilities = {}  # Stores gap-based probabilities separate from visibility
+                    agent2_rod_node_mapping = {}   # NEW: Track which rod created which node probabilities
                     
                     # Start timing gap processing
                     gap_processing_start = time.perf_counter()
                 
+                rod_id = 0  # Track rod ID for threat classification
                 for start_point, end_point, gap_size in gap_lines:
                     # Only process significant gaps
                     if gap_size < 50:
@@ -2886,11 +3053,20 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                                     agent2_gap_probabilities[idx] = max(agent2_gap_probabilities[idx], prob)
                                 else:
                                     agent2_gap_probabilities[idx] = prob
+                                
+                                # NEW: Track rod source for threat classification
+                                if idx not in agent2_rod_node_mapping:
+                                    agent2_rod_node_mapping[idx] = []
+                                agent2_rod_node_mapping[idx].append((rod_id, prob))
+                                
                                 total_probabilities_assigned += 1
                             
                             # End timing vectorized computation
                             node_iteration_end = time.perf_counter()
                             node_iteration_time += (node_iteration_end - node_iteration_start)
+                
+                    # Increment rod ID for next gap
+                    rod_id += 1
                 
                 # End timing gap processing
                 gap_processing_end = time.perf_counter()
