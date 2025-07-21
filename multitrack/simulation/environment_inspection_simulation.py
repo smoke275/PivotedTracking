@@ -28,10 +28,10 @@ except ImportError:
     OVERLAY_AVAILABLE = False
     print("Warning: probability_overlay module not available. Overlay functionality disabled.")
 
-# PHASE 4B OPTIMIZATION: Agent2ComputationOptimizer for selective computation
+# OPTIMIZATION: Agent2ComputationOptimizer for selective computation
 class Agent2ComputationOptimizer:
     """
-    Phase 4B optimization: Selective computation system to avoid unnecessary recomputations
+    Optimization: Selective computation system to avoid unnecessary recomputations
     when agent state hasn't changed significantly.
     """
     def __init__(self):
@@ -112,10 +112,10 @@ class Agent2ComputationOptimizer:
 # Global instance for Agent2 computation optimization
 agent2_optimizer = Agent2ComputationOptimizer()
 
-# PHASE 4B OPTIMIZATION: Mathematical shortcuts and fast approximations
+# OPTIMIZATION: Mathematical shortcuts and fast approximations
 class FastMathOptimizations:
     """
-    Phase 4B optimization: Fast mathematical operations for improved performance.
+    Optimization: Fast mathematical operations for improved performance.
     Provides approximations and optimized calculations that maintain visual quality.
     """
     
@@ -148,7 +148,7 @@ class FastMathOptimizations:
 
 class TrigLookupTable:
     """
-    Phase 4B optimization: Pre-computed trigonometric lookup table for common angles.
+    Optimization: Pre-computed trigonometric lookup table for common angles.
     Trades memory for computation speed.
     """
     
@@ -2245,6 +2245,10 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
             x, y, theta, _ = agent.state
             x2, y2, theta2, _ = agent2.state
             
+            # Initialize threat classification variables (available for entire visualization section)
+            rod_gap_points = {}  # Map rod_id -> gap_point (closest point to escort)
+            rod_threat_stats = {}  # Map rod_id -> {'probabilities': [], 'mean_prob': float}
+            
             # Store font for agent labels
             label_font = pygame.font.SysFont('Arial', 14, bold=True)
             
@@ -2623,6 +2627,11 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                                     'all_rods': rod_sources,
                                     'type': 'rod_based'
                                 }
+                                
+                                # NEW: Collect probabilities for each rod to calculate mean threat level
+                                for rod_id, rod_prob in rod_sources:
+                                    if rod_id in rod_threat_stats:
+                                        rod_threat_stats[rod_id]['probabilities'].append(combined_prob)
                             else:
                                 # Threat from visibility only (no rod involvement)
                                 threat_nodes[node_idx] = {
@@ -2810,6 +2819,87 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                                   (int(x2), int(y2)), int(escort_visibility_range), 2)
                 screen.blit(escort_circle_surface, (0, 0))
             
+            # THREAT CLASSIFICATION DISPLAY: Show mean threat levels for each rod (gap) - runs independently
+            if show_threat_classification:
+                # Rod colors for threat classification
+                rod_colors = [
+                    (255, 0, 0),    # Red - Rod 1
+                    (0, 255, 0),    # Green - Rod 2  
+                    (0, 0, 255),    # Blue - Rod 3
+                    (255, 165, 0),  # Orange - Rod 4
+                    (255, 0, 255),  # Magenta - Rod 5
+                    (0, 255, 255),  # Cyan - Rod 6
+                    (255, 255, 0),  # Yellow - Rod 7
+                    (128, 0, 128),  # Purple - Rod 8
+                ]
+                
+                # Debug: Always show status information
+                try:
+                    debug_font = pygame.font.SysFont('Arial', 12, bold=True)
+                except:
+                    debug_font = pygame.font.Font(None, 16)
+                
+                # Show debug status on screen
+                debug_info = [
+                    f"Threat Classification: {'ON' if show_threat_classification else 'OFF'}",
+                    f"Gap Points: {len(rod_gap_points)}",
+                    f"Threat Stats: {len(rod_threat_stats)}",
+                    f"Gap Lines Available: {len(gap_lines) if 'gap_lines' in locals() else 'N/A'}"
+                ]
+                
+                y_offset = 10
+                for info in debug_info:
+                    debug_surface = debug_font.render(info, True, (255, 255, 0))
+                    screen.blit(debug_surface, (10, y_offset))
+                    y_offset += 20
+                
+                # If we have gap points, process them
+                if rod_gap_points:
+                    # Calculate mean probabilities for each rod
+                    for rod_id, stats in rod_threat_stats.items():
+                        if stats['probabilities']:
+                            stats['mean_prob'] = sum(stats['probabilities']) / len(stats['probabilities'])
+                        else:
+                            stats['mean_prob'] = 0.0
+                    
+                    # Display rod information at gap points
+                    for rod_id, gap_point in rod_gap_points.items():
+                        # Get rod color
+                        rod_color = rod_colors[rod_id % len(rod_colors)]
+                        
+                        # Always show the gap point indicator
+                        pygame.draw.circle(screen, rod_color, (int(gap_point[0]), int(gap_point[1])), 5)
+                        pygame.draw.circle(screen, (255, 255, 255), (int(gap_point[0]), int(gap_point[1])), 7, 2)
+                        
+                        # Show rod ID
+                        rod_text = f"R{rod_id+1}"
+                        rod_surface = debug_font.render(rod_text, True, rod_color)
+                        screen.blit(rod_surface, (int(gap_point[0]) + 10, int(gap_point[1]) - 15))
+                        
+                        # If we have threat stats for this rod, show them
+                        if rod_id in rod_threat_stats:
+                            mean_prob = rod_threat_stats[rod_id]['mean_prob']
+                            threat_count = len(rod_threat_stats[rod_id]['probabilities'])
+                            
+                            if mean_prob > 0:  # Show threat info if there are actual threats
+                                threat_text = f"{mean_prob:.3f} ({threat_count})"
+                                threat_surface = debug_font.render(threat_text, True, (255, 255, 255))
+                                
+                                # Black background for readability
+                                text_rect = threat_surface.get_rect()
+                                bg_surface = pygame.Surface((text_rect.width + 4, text_rect.height + 2), pygame.SRCALPHA)
+                                bg_surface.fill((0, 0, 0, 180))
+                                
+                                text_x = int(gap_point[0] + 10)
+                                text_y = int(gap_point[1] + 5)
+                                screen.blit(bg_surface, (text_x - 2, text_y - 1))
+                                screen.blit(threat_surface, (text_x, text_y))
+                else:
+                    # Show message if no gap points
+                    no_gap_text = "No gap points detected. Enable Agent 2 visibility (K or J)"
+                    no_gap_surface = debug_font.render(no_gap_text, True, (255, 255, 0))
+                    screen.blit(no_gap_surface, (10, 100))
+            
             # INSTANTANEOUS SWEEP-BASED PROBABILITY ASSIGNMENT FOR AGENT 2 (Independent section)
             # Can be enabled either globally via Y key (show_rotating_rods) or individually via J key (show_agent2_rods)
             if (show_rotating_rods or show_agent2_rods) and visibility_map and gap_lines:
@@ -2821,7 +2911,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 # Calculate dynamic vision range: reachability + distance between agents, capped at 800
                 agent2_dynamic_vision_range = min(agent1_reachability + inter_agent_distance, DEFAULT_VISION_RANGE)
                 
-                # PHASE 4B OPTIMIZATION: Selective computation - check if recomputation is needed
+                # OPTIMIZATION: Selective computation - check if recomputation is needed
                 current_agent2_pos = (x2, y2)
                 current_agent2_angle = math.atan2(math.sin(theta2), math.cos(theta2))  # Normalize angle
                 
@@ -2849,7 +2939,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     # Perform full computation
                     computation_skipped = False
                     
-                    # PERFORMANCE TIMING: High-precision timing for Phase 1 optimization
+                    # PERFORMANCE TIMING: High-precision timing for optimization
                     agent2_computation_start = time.perf_counter()
                     
                     # Detailed timing breakdown variables
@@ -2867,7 +2957,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 # Track node count for performance analysis
                 node_count = len(map_graph.nodes) if map_graph and map_graph.nodes else 0
                 
-                # PHASE 4B OPTIMIZATION: Only perform expensive computation if not skipped
+                # OPTIMIZATION: Only perform expensive computation if not skipped
                 if not computation_skipped:
                     # INSTANTANEOUS SWEEP: Process all angles at once to assign gap probabilities
                     agent2_gap_probabilities = {}  # Stores gap-based probabilities separate from visibility
@@ -2898,6 +2988,11 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         far_point = start_point
                         is_cyan_gap = False  # Far-to-near (contracting)
                     
+                    # NEW: Store rod-to-gap-point mapping for threat classification
+                    if show_threat_classification:
+                        rod_gap_points[rod_id] = near_point
+                        rod_threat_stats[rod_id] = {'probabilities': [], 'mean_prob': 0.0}
+                    
                     # Calculate initial rod angle (along the gap line from near to far point)
                     initial_rod_angle = math.atan2(far_point[1] - near_point[1], far_point[0] - near_point[0])
                     
@@ -2922,7 +3017,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     sweep_end_angle = initial_rod_angle + max_rotation * rotation_direction
                     total_sweep_angle = abs(sweep_end_angle - sweep_start_angle)
                     
-                    # PHASE 3 VECTORIZED OPTIMIZATION: Replace nested loops with NumPy operations
+                    # VECTORIZED OPTIMIZATION: Replace nested loops with NumPy operations
                     # This reduces computation from O(angles×nodes) to O(1) vectorized operations
                     
                     # Pre-filter nodes within vision range once for this gap
@@ -2930,7 +3025,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         # Convert all nodes to NumPy arrays for vectorized operations
                         all_nodes = np.array(map_graph.nodes)
                         
-                        # PHASE 4B OPTIMIZATION: Enhanced spatial filtering with multiple criteria
+                        # OPTIMIZATION: Enhanced spatial filtering with multiple criteria
                         agent2_pos = np.array([x2, y2])
                         
                         # Primary filter: Distance-based (use fast squared distance)
@@ -3067,7 +3162,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 gap_processing_end = time.perf_counter()
                 gap_processing_time = gap_processing_end - gap_processing_start
                 
-                # PHASE 4B OPTIMIZATION: Update optimizer state after computation
+                # OPTIMIZATION: Update optimizer state after computation
                 agent2_optimizer.update_state(current_agent2_pos, current_agent2_angle, agent2_gap_probabilities)
                 
                 # VISUAL REPRESENTATION: Draw static swept areas (no animation)
@@ -3121,7 +3216,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     for i in range(num_arc_points + 1):
                         t = i / num_arc_points
                         angle = sweep_start_angle + t * (sweep_end_angle - sweep_start_angle)
-                        # PHASE 4B OPTIMIZATION: Use fast trigonometric lookup
+                        # OPTIMIZATION: Use fast trigonometric lookup
                         point = (
                             rod_base[0] + rod_length * trig_lookup.fast_cos(angle),
                             rod_base[1] + rod_length * trig_lookup.fast_sin(angle)
@@ -3133,7 +3228,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     
                     # Draw the boundary lines of the swept area
                     boundary_color = (gap_color[0]//2, gap_color[1]//2, gap_color[2]//2)
-                    # PHASE 4B OPTIMIZATION: Use fast trigonometric lookup
+                    # OPTIMIZATION: Use fast trigonometric lookup
                     start_boundary = (
                         rod_base[0] + rod_length * trig_lookup.fast_cos(sweep_start_angle),
                         rod_base[1] + rod_length * trig_lookup.fast_sin(sweep_start_angle)
@@ -3146,7 +3241,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     pygame.draw.line(screen, boundary_color, rod_base, end_boundary, 2)
                     
                     # Draw the gap line (initial rod position)
-                    # PHASE 4B OPTIMIZATION: Use fast trigonometric lookup
+                    # OPTIMIZATION: Use fast trigonometric lookup
                     initial_rod_end = (
                         rod_base[0] + rod_length * trig_lookup.fast_cos(initial_rod_angle),
                         rod_base[1] + rod_length * trig_lookup.fast_sin(initial_rod_angle)
@@ -3160,7 +3255,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     # This section just ensures the gap probabilities are calculated and ready
                     pass
                 
-                # PERFORMANCE TIMING: Complete detailed timing analysis for Phase 1 optimization
+                # PERFORMANCE TIMING: Complete detailed timing analysis for optimization
                 agent2_computation_end = time.perf_counter()
                 total_computation_time = agent2_computation_end - agent2_computation_start
                 
@@ -3173,10 +3268,10 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 # Calculate current FPS
                 current_fps = clock.get_fps()
                 
-                # PHASE 4B: Get selective computation statistics
+                # OPTIMIZATION: Get selective computation statistics
                 optimizer_stats = agent2_optimizer.get_performance_stats()
                 
-                # Log performance data to CSV for Phase 4B analysis
+                # Log performance data to CSV for optimization analysis
                 performance_log_file = "agent2_performance_log.csv"
                 timestamp = datetime.now().isoformat()
                 
@@ -3263,10 +3358,10 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
     pygame.quit()
     sys.exit()
 
-# PHASE 4B OPTIMIZATION: Agent2ComputationOptimizer for selective computation
+# OPTIMIZATION: Agent2ComputationOptimizer for selective computation
 class Agent2ComputationOptimizer:
     """
-    Phase 4B optimization: Selective computation system to avoid unnecessary recomputations
+    Optimization: Selective computation system to avoid unnecessary recomputations
     when agent state hasn't changed significantly.
     """
     def __init__(self):

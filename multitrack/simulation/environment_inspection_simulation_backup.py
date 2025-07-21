@@ -1,7 +1,18 @@
 """
-BACKUP VERSION - Environment Inspection Simulation
+BACKUP VERSION - Environment Inspection Simulation (Modular Architecture)
 This script renders the simulation environment without any agents for inspection purposes.
 This is a complete backup copy of the original environment inspection simulation.
+
+KEY FEATURES:
+- Agent-following functionality: Always enabled by default for continuous tracking
+- Modular threat assessment: ThreatCalculator class handles agent tracking and future threat analysis
+- Dual-agent visualization with probability overlays and visibility gap detection
+- Comprehensive node-based visibility analysis with map graph integration
+
+MODULAR COMPONENTS:
+- ThreatCalculator: Handles agent-following, movement detection, and threat assessment calculations
+- Environment inspection with pygame-based visualization
+- Dynamic visibility range calculation and probability analysis
 """
 
 import pygame
@@ -19,6 +30,7 @@ from multitrack.utils.config import *
 from multitrack.models.simulation_environment import SimulationEnvironment
 from multitrack.utils.map_graph import MapGraph
 from multitrack.utils.pathfinding import find_closest_node
+from threat_calculator import ThreatCalculator
 
 # Import probability overlay for in-game visualization
 try:
@@ -28,213 +40,7 @@ except ImportError:
     OVERLAY_AVAILABLE = False
     print("Warning: probability_overlay module not available. Overlay functionality disabled.")
 
-# PHASE 4B OPTIMIZATION: Agent2ComputationOptimizer for selective computation
-class Agent2ComputationOptimizer:
-    """
-    Phase 4B optimization: Selective computation system to avoid unnecessary recomputations
-    when agent state hasn't changed significantly.
-    """
-    def __init__(self):
-        self.last_position = None
-        self.last_angle = None
-        self.last_result = None
-        self.last_gap_probabilities = None
-        
-        # Configurable thresholds for detecting significant changes
-        self.position_threshold = 5.0  # pixels - recompute if agent moves >5px
-        self.angle_threshold = 0.1     # radians (~5.7 degrees) - recompute if angle changes significantly
-        
-        # Performance tracking
-        self.computation_skipped = 0
-        self.computation_performed = 0
-        
-        # Cache invalidation tracking
-        self.frames_since_last_computation = 0
-        self.max_frames_without_computation = 30  # Force recomputation every 30 frames max
-    
-    def needs_recomputation(self, current_pos, current_angle):
-        """
-        Determine if Agent2 computation needs to be performed based on state changes.
-        
-        Args:
-            current_pos: Current agent position (x, y)
-            current_angle: Current agent angle in radians
-            
-        Returns:
-            bool: True if recomputation is needed, False if cached result can be used
-        """
-        # Always compute on first run
-        if self.last_position is None:
-            return True
-            
-        # Force recomputation after max frames to prevent stale data
-        if self.frames_since_last_computation >= self.max_frames_without_computation:
-            return True
-        
-        # Check position change
-        pos_delta = math.sqrt((current_pos[0] - self.last_position[0])**2 + 
-                             (current_pos[1] - self.last_position[1])**2)
-        
-        # Check angle change
-        angle_delta = abs(current_angle - self.last_angle)
-        # Handle angle wraparound (e.g., from 359° to 1°)
-        angle_delta = min(angle_delta, 2*math.pi - angle_delta)
-        
-        return (pos_delta > self.position_threshold or 
-                angle_delta > self.angle_threshold)
-    
-    def update_state(self, position, angle, gap_probabilities):
-        """Update cached state after computation"""
-        self.last_position = position
-        self.last_angle = angle
-        self.last_gap_probabilities = gap_probabilities.copy() if gap_probabilities else {}
-        self.computation_performed += 1
-        self.frames_since_last_computation = 0
-    
-    def skip_computation(self):
-        """Record that computation was skipped and return cached result"""
-        self.computation_skipped += 1
-        self.frames_since_last_computation += 1
-        return self.last_gap_probabilities if self.last_gap_probabilities else {}
-    
-    def get_performance_stats(self):
-        """Get performance statistics for monitoring"""
-        total_calls = self.computation_performed + self.computation_skipped
-        skip_rate = self.computation_skipped / total_calls if total_calls > 0 else 0
-        return {
-            'total_calls': total_calls,
-            'computations_performed': self.computation_performed,
-            'computations_skipped': self.computation_skipped,
-            'skip_rate_percent': skip_rate * 100,
-            'frames_since_last': self.frames_since_last_computation
-        }
-
-# Global instance for Agent2 computation optimization
-agent2_optimizer = Agent2ComputationOptimizer()
-
-# PHASE 4B OPTIMIZATION: Mathematical shortcuts and fast approximations
-class FastMathOptimizations:
-    """
-    Phase 4B optimization: Fast mathematical operations for improved performance.
-    Provides approximations and optimized calculations that maintain visual quality.
-    """
-    
-    @staticmethod
-    def fast_distance_squared(p1, p2):
-        """Fast squared distance calculation (avoids sqrt when only comparison needed)"""
-        dx = p1[0] - p2[0]
-        dy = p1[1] - p2[1]
-        return dx * dx + dy * dy
-    
-    @staticmethod
-    def fast_distance_check(p1, p2, threshold):
-        """Fast distance check using squared distance to avoid sqrt"""
-        return FastMathOptimizations.fast_distance_squared(p1, p2) < (threshold * threshold)
-    
-    @staticmethod
-    def fast_normalize_angle(angle):
-        """Fast angle normalization to [0, 2π] range"""
-        while angle < 0:
-            angle += 2 * math.pi
-        while angle >= 2 * math.pi:
-            angle -= 2 * math.pi
-        return angle
-    
-    @staticmethod
-    def fast_angle_difference(angle1, angle2):
-        """Fast calculation of minimum angle difference (handles wraparound)"""
-        diff = abs(angle1 - angle2)
-        return min(diff, 2 * math.pi - diff)
-
-class TrigLookupTable:
-    """
-    Phase 4B optimization: Pre-computed trigonometric lookup table for common angles.
-    Trades memory for computation speed.
-    """
-    
-    def __init__(self, precision=1000):
-        self.precision = precision
-        self.angle_step = 2 * math.pi / precision
-        
-        # Pre-compute sin/cos for common angles
-        self.angles = np.linspace(0, 2 * math.pi, precision, endpoint=False)
-        self.cos_table = np.cos(self.angles)
-        self.sin_table = np.sin(self.angles)
-    
-    def fast_cos(self, angle):
-        """Fast cosine lookup with linear interpolation"""
-        # Normalize angle to [0, 2π]
-        angle = angle % (2 * math.pi)
-        
-        # Find nearest table index
-        index = int(angle / self.angle_step)
-        index = min(index, self.precision - 1)
-        
-        return self.cos_table[index]
-    
-    def fast_sin(self, angle):
-        """Fast sine lookup with linear interpolation"""
-        # Normalize angle to [0, 2π]
-        angle = angle % (2 * math.pi)
-        
-        # Find nearest table index
-        index = int(angle / self.angle_step)
-        index = min(index, self.precision - 1)
-        
-        return self.sin_table[index]
-
-# Global instances for mathematical optimizations
-fast_math = FastMathOptimizations()
-trig_lookup = TrigLookupTable(precision=360000)  # 0.001 degree precision (100x better, ~5.76MB RAM)
-
-# REDUNDANCY ELIMINATION: Common ray casting and gap processing utilities
-def cast_rays_and_find_gaps(position_x, position_y, visibility_range, environment):
-    """
-    Consolidated ray casting and gap finding logic.
-    Eliminates duplicate ray casting code throughout the file.
-    
-    Returns:
-        tuple: (ray_endpoints, gap_lines)
-    """
-    from multitrack.utils.vision import cast_vision_ray
-    
-    # Cast rays in all directions to find visibility discontinuities
-    num_rays = 360  # Every 1 degree for finer resolution
-    angle_step = (2 * math.pi) / num_rays
-    ray_endpoints = []
-    
-    # Cast rays in all directions
-    for i in range(num_rays):
-        angle = i * angle_step
-        endpoint = cast_vision_ray(
-            position_x, 
-            position_y, 
-            angle, 
-            visibility_range,
-            environment.get_all_walls(),
-            environment.get_doors()  # Doors allow vision through
-        )
-        ray_endpoints.append(endpoint)
-    
-    # Find discontinuities in ray distances and connect successive rays with abrupt changes
-    min_gap_distance = 30  # Minimum distance difference to consider a gap
-    gap_lines = []
-    
-    for i in range(num_rays):
-        current_endpoint = ray_endpoints[i]
-        next_endpoint = ray_endpoints[(i + 1) % num_rays]  # Wrap around
-        
-        # Calculate distances from position
-        current_dist = math.dist((position_x, position_y), current_endpoint)
-        next_dist = math.dist((position_x, position_y), next_endpoint)
-        
-        # Check for significant distance change (gap) between successive rays
-        distance_diff = abs(current_dist - next_dist)
-        if distance_diff > min_gap_distance:
-            # Record this gap line connecting the two successive ray endpoints
-            gap_lines.append((current_endpoint, next_endpoint, distance_diff))
-    
-    return ray_endpoints, gap_lines
+# REDUNDANCY ELIMINATION: Common gap processing utilities
 
 def calculate_dynamic_visibility_range(agent1_pos, agent2_pos, time_horizon, leader_speed):
     """
@@ -326,7 +132,8 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
         MAP_GRAPH_CACHE_FILE,
         MAP_GRAPH_INSPECTION_CACHE_FILE,
         MAP_GRAPH_VISIBILITY_CACHE_FILE,
-        MAP_GRAPH_VISIBILITY_RANGE
+        MAP_GRAPH_VISIBILITY_RANGE,
+        DEFAULT_VISION_RANGE
     )
 
     # Set up the display
@@ -491,12 +298,6 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
     visibility_map = {}
     selected_node_index = None
     
-    # Agent-following functionality
-    follow_agent_mode = False  # Toggle for agent-following mode
-    agent_last_position = None  # Track agent's last position
-    agent_movement_threshold = 20.0  # Minimum distance to consider agent has moved
-    agent_following_node_index = None  # Current node closest to agent when following
-    
     # Initialize simple probability overlay variable
     show_probability_overlay = False
     
@@ -601,6 +402,22 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
             # Set initial selected node after analysis
             if selected_node_index is None and map_graph.nodes:
                 selected_node_index = 0
+
+    # Initialize ThreatCalculator for dual-agent tracking with environment awareness
+    threat_calc = ThreatCalculator(map_graph, environment, movement_threshold=20.0)
+    
+    # Get optimizer instances from ThreatCalculator (optimizations)
+    agent2_optimizer = threat_calc.get_agent2_optimizer()
+    fast_math = threat_calc.get_fast_math()
+    trig_lookup = threat_calc.get_trig_lookup()
+    
+    # Initialize agent-following since it's always active
+    if map_graph.nodes:
+        print("Agent-following: Always ON - Visibility will track agent movement")
+        initial_node, init_message = threat_calc.initialize_agent_following(agent, agent2, visibility_map)
+        if initial_node is not None:
+            selected_node_index = initial_node
+        print(init_message)
     
     # Function to calculate and display detailed stats during visibility analysis
     def calculate_visibility_stats(visibility_map, total_nodes):
@@ -732,48 +549,6 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         else:
                             print("No visibility data found. Press V to analyze visibility.")
                         
-                    elif event.key == pygame.K_n:
-                        # Go to next node in map graph
-                        if map_graph.nodes:
-                            if selected_node_index is None:
-                                selected_node_index = 0
-                            else:
-                                selected_node_index = (selected_node_index + 1) % len(map_graph.nodes)
-                            
-                            if visibility_map and selected_node_index in visibility_map:
-                                visible_count = len(visibility_map[selected_node_index])
-                                print(f"Selected node {selected_node_index} with {visible_count} visible nodes")
-                            else:
-                                print(f"Selected node {selected_node_index} (no visibility data)")
-                    
-                    elif event.key == pygame.K_p:
-                        # Go to previous node in map graph
-                        if map_graph.nodes:
-                            if selected_node_index is None:
-                                selected_node_index = len(map_graph.nodes) - 1
-                            else:
-                                selected_node_index = (selected_node_index - 1) % len(map_graph.nodes)
-                            
-                            if visibility_map and selected_node_index in visibility_map:
-                                visible_count = len(visibility_map[selected_node_index])
-                                print(f"Selected node {selected_node_index} with {visible_count} visible nodes")
-                            else:
-                                print(f"Selected node {selected_node_index} (no visibility data)")
-                    elif event.key == pygame.K_f:
-                        # Toggle agent-following mode
-                        follow_agent_mode = not follow_agent_mode
-                        if follow_agent_mode:
-                            print("Agent-following mode: ON - Visibility will track agent movement")
-                            # Initialize agent position tracking
-                            agent_last_position = (agent.state[0], agent.state[1])
-                            # Find closest node to current agent position
-                            agent_pos = (agent.state[0], agent.state[1])
-                            agent_following_node_index = find_closest_node(map_graph.nodes, agent_pos)
-                            if agent_following_node_index is not None and visibility_map:
-                                selected_node_index = agent_following_node_index
-                                print(f"Following agent at node {selected_node_index}")
-                        else:
-                            print("Agent-following mode: OFF - Manual node selection enabled")
                     elif event.key == pygame.K_o:
                         # Toggle probability overlay
                         show_probability_overlay = not show_probability_overlay
@@ -842,20 +617,8 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         # Z key: Auto-enable agent 1 features (F+O+B+Y) + H (extended probability set)
                         print("Z: Enabling agent 1 features (F+O+B+Y+H)...")
                         
-                        # 1. Enable agent-following mode (F key)
-                        if not follow_agent_mode:
-                            follow_agent_mode = True
-                            print("✓ Agent-following: ON")
-                            # Initialize agent position tracking
-                            agent_last_position = (agent.state[0], agent.state[1])
-                            # Find closest node to current agent position
-                            agent_pos = (agent.state[0], agent.state[1])
-                            agent_following_node_index = find_closest_node(map_graph.nodes, agent_pos)
-                            if agent_following_node_index is not None and visibility_map:
-                                selected_node_index = agent_following_node_index
-                                print(f"  Following at node {selected_node_index}")
-                        else:
-                            print("✓ Agent-following: Already ON")
+                        # 1. Agent-following is always enabled (no longer needs activation)
+                        print("✓ Agent-following: Always ON (automatic)")
                         
                         # 2. Enable probability overlay (O key)
                         if not show_probability_overlay:
@@ -942,20 +705,9 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         # 1. Execute Z key functionality: Auto-enable agent 1 features (F+O+B+Y+H)
                         print("Step 1/3: Enabling agent 1 features (F+O+B+Y+H)...")
                         
-                        # Enable agent-following mode (F key)
-                        if not follow_agent_mode:
-                            follow_agent_mode = True
-                            print("  ✓ Agent-following: ON")
-                            # Initialize agent position tracking
-                            agent_last_position = (agent.state[0], agent.state[1])
-                            # Find closest node to current agent position
-                            agent_pos = (agent.state[0], agent.state[1])
-                            agent_following_node_index = find_closest_node(map_graph.nodes, agent_pos)
-                            if agent_following_node_index is not None and visibility_map:
-                                selected_node_index = agent_following_node_index
-                                print(f"    Following at node {selected_node_index}")
-                        else:
-                            print("  ✓ Agent-following: Already ON")
+                        # Agent-following mode (always enabled automatically)
+                        # Note: Agent-following is now always active by default
+                        print("  ✓ Agent-following: Always ON (automatic)")
                         
                         # Enable probability overlay (O key)
                         if not show_probability_overlay:
@@ -1150,37 +902,15 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
             agent2.set_controls(linear_vel2, angular_vel2)
             agent2.update(dt=0.1, walls=environment.get_all_walls(), doors=environment.get_doors())
 
-            # Agent-following functionality
-            if follow_agent_mode and visibility_map:
-                current_agent_position = (agent.state[0], agent.state[1])
-                
-                # Check if agent has moved significantly
-                agent_moved = False
-                if agent_last_position is None:
-                    agent_moved = True
-                else:
-                    distance_moved = ((current_agent_position[0] - agent_last_position[0]) ** 2 + 
-                                    (current_agent_position[1] - agent_last_position[1]) ** 2) ** 0.5
-                    if distance_moved >= agent_movement_threshold:
-                        agent_moved = True
-                
-                # Update visibility display if agent moved significantly
-                if agent_moved:
-                    # Find the closest node to the agent's current position
-                    new_closest_node = find_closest_node(map_graph.nodes, current_agent_position)
-                    
-                    # Only update if we found a node and it's different from current
-                    if (new_closest_node is not None and 
-                        new_closest_node != agent_following_node_index and
-                        new_closest_node in visibility_map):
-                        
-                        agent_following_node_index = new_closest_node
-                        selected_node_index = agent_following_node_index
-                        agent_last_position = current_agent_position
-                        
-                        # Optional: Print debug info (can be removed later)
-                        visible_count = len(visibility_map[selected_node_index])
-                        print(f"Agent moved - now following node {selected_node_index} with {visible_count} visible nodes")
+            # Update both agent positions in ThreatCalculator before calculations
+            threat_calc.update_agent_positions(agent, agent2)
+
+            # Agent-following functionality - always active (via ThreatCalculator)
+            updated_node, agent_moved, debug_msg = threat_calc.update_agent_following(agent, agent2, visibility_map)
+            if updated_node is not None:
+                selected_node_index = updated_node
+            if debug_msg:
+                print(debug_msg)
 
             # Debug: print agent state
             # print(f"Agent state: {agent.state}")
@@ -1191,92 +921,13 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
             # Draw the environment
             environment.draw(screen, font)
             
-            # Calculate node probabilities if probability overlay is enabled (INDEPENDENT of map graph visuals)
+            # Calculate node probabilities if probability overlay is enabled (via ThreatCalculator)
             node_probabilities = {}
             if show_probability_overlay and visibility_map and selected_node_index in visibility_map:
-                    agent_x, agent_y = agent.state[0], agent.state[1]
-                    agent_theta = agent.state[2]  # Agent's heading angle
-                    
-                    # Calculate maximum reachable distance based on time horizon and agent speed
-                    agent_speed = LEADER_LINEAR_VEL  # Use leader speed from config
-                    max_reachable_distance = time_horizon * agent_speed
-                    
-                    # Use the reachable distance directly for probability calculation
-                    max_distance = max_reachable_distance
-                    
-                    # Get the list of nodes visible from the selected node
-                    visible_node_indices = set(visibility_map[selected_node_index])
-                    
-                    # Check if time horizon is too restrictive or too permissive
-                    reachable_count = 0
-                    total_visible_count = len(visible_node_indices)
-                    
-                    # First pass: count reachable nodes
-                    for i, node in enumerate(map_graph.nodes):
-                        if i in visible_node_indices:
-                            node_x, node_y = node
-                            distance = math.sqrt((node_x - agent_x)**2 + (node_y - agent_y)**2)
-                            if distance <= max_distance:
-                                reachable_count += 1
-                    
-                    # Handle edge cases
-                    edge_case_handled = False
-                    if reachable_count == 0 and total_visible_count > 0:
-                        # Time horizon too low - no nodes are reachable
-                        # Set very small probabilities for closest visible nodes
-                        closest_distances = []
-                        for i, node in enumerate(map_graph.nodes):
-                            if i in visible_node_indices:
-                                node_x, node_y = node
-                                distance = math.sqrt((node_x - agent_x)**2 + (node_y - agent_y)**2)
-                                closest_distances.append((distance, i))
-                        
-                        # Sort by distance and assign small probabilities to closest 3 nodes
-                        closest_distances.sort()
-                        for idx, (dist, node_idx) in enumerate(closest_distances[:3]):
-                            node_probabilities[node_idx] = 0.1 * (1.0 - idx * 0.3)  # 0.1, 0.07, 0.04
-                        edge_case_handled = True
-                    
-                    elif reachable_count == total_visible_count and total_visible_count > 1:
-                        # Time horizon too high - all visible nodes are reachable
-                        # Use the current max_distance but ensure probabilities are well distributed
-                        # Don't change max_distance here - let it use the time horizon-based value
-                        edge_case_handled = False  # Let normal calculation proceed with time horizon distance
-                    
-                    # Normal probability calculation (or edge case for "all reachable")
-                    if not edge_case_handled:
-                        for i, node in enumerate(map_graph.nodes):
-                            # Only calculate probability for nodes that are visible from the selected node
-                            if i in visible_node_indices:
-                                node_x, node_y = node
-                                distance = math.sqrt((node_x - agent_x)**2 + (node_y - agent_y)**2)
-                                
-                                if distance <= max_distance:
-                                    # Calculate distance-based probability (1.0 at agent position, 0.0 at max_distance)
-                                    distance_prob = max(0, 1.0 - (distance / max_distance))
-                                    
-                                    # Calculate heading angle bias
-                                    if distance > 1.0:  # Avoid division by zero for nodes very close to agent
-                                        # Calculate angle from agent to node
-                                        node_angle = math.atan2(node_y - agent_y, node_x - agent_x)
-                                        
-                                        # Calculate angular difference between agent heading and direction to node
-                                        angle_diff = abs(agent_theta - node_angle)
-                                        # Normalize to [0, π] (shortest angular distance)
-                                        if angle_diff > math.pi:
-                                            angle_diff = 2 * math.pi - angle_diff
-                                        
-                                        # Convert angle difference to heading bias factor
-                                        heading_bias = max(0, 1.0 - (angle_diff / math.pi))
-                                        
-                                        # Weight the heading bias (0.3 = 30% distance, 70% heading)
-                                        probability = distance_prob * (0.3 + 0.7 * heading_bias)
-                                    else:
-                                        # For very close nodes, use distance-only probability
-                                        probability = distance_prob
-                                    
-                                    if probability > 0.05:  # Only store significant probabilities
-                                        node_probabilities[i] = probability
+                # Use ThreatCalculator for modular probability calculation
+                node_probabilities = threat_calc.calculate_agent_probabilities(
+                    agent, visibility_map, selected_node_index, time_horizon, LEADER_LINEAR_VEL
+                )
             
             # Draw map graph visuals if enabled
             if show_map_graph_visuals:
@@ -1349,9 +1000,6 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                 "R: Regenerate map graph (when visible)",
                 "V: Analyze node visibility",
                 "L: Load visibility data",
-                "N: Next node (visibility mode)",
-                "P: Previous node (visibility mode)",
-                "F: Toggle agent-following mode",
                 f"O: Toggle prob overlay {'(ON)' if show_probability_overlay else '(OFF)'} - needs visibility, light blue-red blend",
                 f"B: Toggle 1st agent gaps {'(ON)' if show_visibility_gaps else '(OFF)'} - blue/violet",
                 f"J: 2nd agent prob {'(ON)' if show_agent2_probability_overlay else '(OFF)'} - dynamic visibility range, pink-green blend",
@@ -1469,48 +1117,31 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                         # Conditionally draw either green visibility lines OR gap arcs based on 'H' key toggle
                         if show_extended_probability_set:
                             # Show extended probability set (gap arcs) instead of green visibility lines
-                            # Use consolidated ray casting function
-                            ray_endpoints, gap_lines = cast_rays_and_find_gaps(
-                                selected_node[0], 
-                                selected_node[1], 
+                            # Use ThreatCalculator for modular ray casting
+                            ray_endpoints, gap_lines = threat_calc.calculate_visibility_gaps(
+                                agent, 
                                 MAP_GRAPH_VISIBILITY_RANGE, 
-                                environment
+                                selected_node_index
+                            )
+                            
+                            # Get visualization data with proper color coding
+                            visualization_data = threat_calc.calculate_gap_visualization_data(
+                                gap_lines, 
+                                selected_node
                             )
                             
                             # Draw all the gap lines with orientation-based coloring
-                            for start_point, end_point, gap_size in gap_lines:
-                                # Determine gap orientation relative to clockwise ray casting
-                                start_dist = math.dist(selected_node, start_point)
-                                end_dist = math.dist(selected_node, end_point)
-                                
-                                # Classify gap type based on distance progression
-                                is_near_to_far = start_dist < end_dist  # Near point first, far point second
-                                is_far_to_near = start_dist > end_dist  # Far point first, near point second
-                                
-                                # Choose base color based on gap orientation
-                                if is_near_to_far:
-                                    # Blue for near-to-far transitions (expanding gaps)
-                                    base_color = (0, 100, 255) if gap_size > 150 else (50, 150, 255) if gap_size > 80 else (100, 200, 255)
-                                elif is_far_to_near:
-                                    # Violet for far-to-near transitions (contracting gaps)
-                                    base_color = (150, 0, 255) if gap_size > 150 else (180, 50, 255) if gap_size > 80 else (200, 100, 255)
-                                else:
-                                    # Fallback color for equal distances (rare case)
-                                    base_color = (100, 100, 100)
-                                
-                                # Determine line width based on gap size
-                                if gap_size > 150:
-                                    line_width = 3
-                                elif gap_size > 80:
-                                    line_width = 2
-                                else:
-                                    line_width = 1
+                            for gap_data in visualization_data:
+                                start_point = gap_data['start_point']
+                                end_point = gap_data['end_point']
+                                base_color = gap_data['color']
+                                line_width = gap_data['line_width']
+                                circle_size = gap_data['circle_size']
                                 
                                 # Draw the gap line connecting successive ray endpoints
                                 pygame.draw.line(screen, base_color, start_point, end_point, line_width)
                                 
                                 # Draw small circles at the gap endpoints to highlight them
-                                circle_size = max(2, min(5, int(gap_size / 30)))
                                 pygame.draw.circle(screen, base_color, start_point, circle_size)
                                 pygame.draw.circle(screen, base_color, end_point, circle_size)
                         else:
@@ -1532,228 +1163,45 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                             
                         # VISIBILITY GAPS VISUALIZATION: Draw ray casting discontinuities (abrupt changes in visibility)
                         if show_visibility_gaps:
-                            # Use consolidated ray casting function
-                            ray_endpoints, gap_lines = cast_rays_and_find_gaps(
-                                selected_node[0], 
-                                selected_node[1], 
+                            # Use ThreatCalculator for modular visibility gaps calculation
+                            ray_endpoints, gap_lines = threat_calc.calculate_visibility_gaps(
+                                agent, 
                                 MAP_GRAPH_VISIBILITY_RANGE, 
-                                environment
+                                selected_node_index
+                            )
+                            
+                            # Get visualization data with proper color coding
+                            visualization_data = threat_calc.calculate_gap_visualization_data(
+                                gap_lines, 
+                                selected_node
                             )
                             
                             # Draw all the gap lines with orientation-based coloring
-                            for start_point, end_point, gap_size in gap_lines:
-                                # Determine gap orientation relative to clockwise ray casting
-                                start_dist = math.dist(selected_node, start_point)
-                                end_dist = math.dist(selected_node, end_point)
-                                
-                                # Classify gap type based on distance progression
-                                is_near_to_far = start_dist < end_dist  # Near point first, far point second
-                                is_far_to_near = start_dist > end_dist  # Far point first, near point second
-                                
-                                # Choose base color based on gap orientation
-                                if is_near_to_far:
-                                    # Blue for near-to-far transitions (expanding gaps)
-                                    base_color = (0, 100, 255) if gap_size > 150 else (50, 150, 255) if gap_size > 80 else (100, 200, 255)
-                                elif is_far_to_near:
-                                    # Violet for far-to-near transitions (contracting gaps)
-                                    base_color = (150, 0, 255) if gap_size > 150 else (180, 50, 255) if gap_size > 80 else (200, 100, 255)
-                                else:
-                                    # Fallback color for equal distances (rare case)
-                                    base_color = (100, 100, 100)
-                                
-                                # Determine line width based on gap size
-                                if gap_size > 150:
-                                    line_width = 3
-                                elif gap_size > 80:
-                                    line_width = 2
-                                else:
-                                    line_width = 1
+                            for gap_data in visualization_data:
+                                start_point = gap_data['start_point']
+                                end_point = gap_data['end_point']
+                                base_color = gap_data['color']
+                                line_width = gap_data['line_width']
+                                circle_size = gap_data['circle_size']
                                 
                                 # Draw the gap line connecting successive ray endpoints
                                 pygame.draw.line(screen, base_color, start_point, end_point, line_width)
                                 
                                 # Draw small circles at the gap endpoints to highlight them
-                                circle_size = max(2, min(5, int(gap_size / 30)))
                                 pygame.draw.circle(screen, base_color, start_point, circle_size)
                                 pygame.draw.circle(screen, base_color, end_point, circle_size)
                             
                             # EXTENDED PROBABILITIES COMPUTATION: Always compute when conditions are met
                             propagated_probabilities = {}
                             if show_probability_overlay and node_probabilities:
-                                # Process gaps to compute extended probabilities in the background
-                                for start_point, end_point, gap_size in gap_lines:
-                                    # Only process significant gaps
-                                    if gap_size < 50:
-                                        continue
-                                    
-                                    # Determine gap orientation and near/far points
-                                    start_dist = math.dist(selected_node, start_point)
-                                    end_dist = math.dist(selected_node, end_point)
-                                    
-                                    # Determine near point (pivot point) and far point
-                                    if start_dist < end_dist:
-                                        near_point = start_point
-                                        far_point = end_point
-                                        is_blue_gap = True  # Near-to-far (expanding)
-                                    else:
-                                        near_point = end_point
-                                        far_point = start_point
-                                        is_blue_gap = False  # Far-to-near (contracting)
-                                    
-                                    # Calculate initial rod angle (along the gap line from near to far point)
-                                    initial_rod_angle = math.atan2(far_point[1] - near_point[1], far_point[0] - near_point[0])
-                                    
-                                    # Calculate rod length: should extend from near point to the edge of reachability circle
-                                    # Get agent position and max reachable distance
-                                    agent_x, agent_y = agent.state[0], agent.state[1]
-                                    max_reachable_distance = time_horizon * LEADER_LINEAR_VEL
-                                    
-                                    # Calculate distance from agent to rod base (near point)
-                                    distance_to_rod_base = math.sqrt((near_point[0] - agent_x)**2 + (near_point[1] - agent_y)**2)
-                                    
-                                    # Calculate maximum rod length that stays within reachability circle
-                                    if distance_to_rod_base >= max_reachable_distance:
-                                        # Rod base is outside reachability circle, use minimal rod
-                                        rod_length = 10
-                                    else:
-                                        # Rod length = remaining distance from base to circle edge
-                                        remaining_distance_to_circle = max_reachable_distance - distance_to_rod_base
-                                        
-                                        # Also consider the original gap size as a constraint
-                                        original_gap_rod_length = math.dist(near_point, far_point)
-                                        
-                                        # Use the smaller of the two: gap size or remaining circle distance
-                                        rod_length = min(remaining_distance_to_circle, original_gap_rod_length)
-                                        
-                                        # Ensure minimum rod length for visibility
-                                        rod_length = max(20, rod_length)
-                                    
-                                    max_rotation = math.pi / 4  # Maximum 45 degrees rotation
-                                    
-                                    # Determine rotation direction based on gap color
-                                    if is_blue_gap:
-                                        rotation_direction = -1  # Anticlockwise (counterclockwise)
-                                    else:
-                                        rotation_direction = 1   # Clockwise
-                                    
-                                    # SINGLE DIRECTION ROTATION: Rod pivots at near point, rotates in one direction only
-                                    rod_base = near_point
-                                    
-                                    # Calculate the swept arc range
-                                    sweep_start_angle = initial_rod_angle
-                                    sweep_end_angle = initial_rod_angle + max_rotation * rotation_direction
-                                    
-                                    
-                                    # OPTIMIZED GRADIENT-BASED PROBABILITY PROPAGATION
-                                    # Step 1: Record probability values at gap endpoints
-                                    
-                                    # Find probability at near point (rod base)
-                                    near_point_prob = 0.0
-                                    min_distance_near = float('inf')
-                                    for node_idx, prob in node_probabilities.items():
-                                        node_pos = map_graph.nodes[node_idx]
-                                        dist_to_near = math.dist(node_pos, near_point)
-                                        if dist_to_near < min_distance_near and dist_to_near < 50:  # Within 50px
-                                            min_distance_near = dist_to_near
-                                            near_point_prob = prob
-                                    
-                                    # Find probability at far point (gap end)
-                                    far_point_prob = 0.0
-                                    min_distance_far = float('inf')
-                                    far_point_actual = (
-                                        rod_base[0] + rod_length * math.cos(initial_rod_angle),
-                                        rod_base[1] + rod_length * math.sin(initial_rod_angle)
-                                    )
-                                    for node_idx, prob in node_probabilities.items():
-                                        node_pos = map_graph.nodes[node_idx]
-                                        dist_to_far = math.dist(node_pos, far_point_actual)
-                                        if dist_to_far < min_distance_far and dist_to_far < 50:  # Within 50px
-                                            min_distance_far = dist_to_far
-                                            far_point_prob = prob
-                                    
-                                    # If no probabilities found nearby, use default values
-                                    if near_point_prob == 0.0 and far_point_prob == 0.0:
-                                        near_point_prob = 0.3  # Default probability at near point
-                                        far_point_prob = 0.1   # Lower probability at far point
-                                    
-                                    # Step 2: FAST GRID PROCESSING - optimized for speed
-                                    
-                                    # REDUCED grid density for better performance
-                                    angle_steps = 15  # Reduced from 40
-                                    radius_steps = 8  # Reduced from 20
-                                    
-                                    # Calculate sweep bounds
-                                    total_sweep_angle = abs(sweep_end_angle - sweep_start_angle)
-                                    
-                                    # PRE-FILTER: Only consider nodes that are NOT already probabilized and in general area
-                                    candidate_nodes = []
-                                    arc_center_x = rod_base[0] + (rod_length / 2) * math.cos(initial_rod_angle)
-                                    arc_center_y = rod_base[1] + (rod_length / 2) * math.sin(initial_rod_angle)
-                                    filter_radius = rod_length + 50  # General area around the arc
-                                    
-                                    for j, node in enumerate(map_graph.nodes):
-                                        if j not in node_probabilities:  # Skip nodes with existing probabilities
-                                            # Quick distance check to arc center
-                                            dx = node[0] - arc_center_x
-                                            dy = node[1] - arc_center_y
-                                            if dx*dx + dy*dy <= filter_radius*filter_radius:  # Avoid sqrt
-                                                candidate_nodes.append((j, node))
-                                    
-                                    # Process grid points with optimized node search
-                                    search_radius = 25
-                                    search_radius_sq = search_radius * search_radius  # Avoid sqrt in distance calc
-                                    
-                                    for a in range(angle_steps + 1):
-                                        for r in range(1, radius_steps + 1):
-                                            angle_progress = a / angle_steps
-                                            radius_progress = r / radius_steps
-                                            current_angle = sweep_start_angle + angle_progress * (sweep_end_angle - sweep_start_angle)
-                                            current_radius = radius_progress * rod_length
-                                            
-                                            sweep_x = rod_base[0] + current_radius * math.cos(current_angle)
-                                            sweep_y = rod_base[1] + current_radius * math.sin(current_angle)
-                                            
-                                            # Boundary check (avoid sqrt)
-                                            dx_agent = sweep_x - agent_x
-                                            dy_agent = sweep_y - agent_y
-                                            dist_sq_agent = dx_agent*dx_agent + dy_agent*dy_agent
-                                            
-                                            if dist_sq_agent <= max_reachable_distance*max_reachable_distance:
-                                                # Calculate probability with stronger distance-based decay
-                                                base_probability = (1 - radius_progress) * near_point_prob + radius_progress * far_point_prob
-                                                
-                                                # Stronger angular decay - harder to reach at wider angles
-                                                angular_decay = max(0.1, 1.0 - (angle_progress * 0.8))
-                                                
-                                                # Distance-based decay - exponential decay with distance from rod base
-                                                distance_decay = max(0.2, 1.0 - (radius_progress ** 1.5) * 0.7)
-                                                
-                                                # Overall propagation decay
-                                                propagation_decay = 0.7
-                                                
-                                                final_probability = base_probability * angular_decay * distance_decay * propagation_decay
-                                                
-                                                if final_probability > 0.03:  # Only store significant probabilities
-                                                    # FAST node search - only through pre-filtered candidates
-                                                    closest_node_idx = None
-                                                    closest_distance_sq = search_radius_sq
-                                                    
-                                                    for node_idx, node in candidate_nodes:
-                                                        dx = node[0] - sweep_x
-                                                        dy = node[1] - sweep_y
-                                                        dist_sq = dx*dx + dy*dy  # Avoid sqrt
-                                                        
-                                                        if dist_sq < closest_distance_sq:
-                                                            closest_distance_sq = dist_sq
-                                                            closest_node_idx = node_idx
-                                                    
-                                                    # Assign probability
-                                                    if closest_node_idx is not None:
-                                                        if closest_node_idx in propagated_probabilities:
-                                                            propagated_probabilities[closest_node_idx] = max(
-                                                                propagated_probabilities[closest_node_idx], final_probability)
-                                                        else:
-                                                            propagated_probabilities[closest_node_idx] = final_probability
+                                # Use ThreatCalculator for extended probabilities calculation
+                                propagated_probabilities = threat_calc.calculate_extended_probabilities_from_gaps(
+                                    agent, 
+                                    gap_lines, 
+                                    node_probabilities, 
+                                    time_horizon, 
+                                    LEADER_LINEAR_VEL
+                                )
             
             # Draw probability overlay nodes (INDEPENDENT of map graph visuals)
             if show_probability_overlay and node_probabilities and not show_combined_probability_mode:
@@ -1987,12 +1435,12 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
             # Generate gap lines for both visibility gaps and rotating rods
             gap_lines = []
             if show_agent2_visibility_gaps or show_agent2_rods:
-                # Use consolidated ray casting function for agent 2
-                ray_endpoints, gap_lines = cast_rays_and_find_gaps(
-                    x2, 
-                    y2, 
+                # Use ThreatCalculator for agent 2 visibility gap calculation
+                agent2_pos = (x2, y2)
+                ray_endpoints, gap_lines = threat_calc.calculate_visibility_gaps(
+                    agent2, 
                     calculate_dynamic_visibility_range((x, y), (x2, y2), time_horizon, LEADER_LINEAR_VEL), 
-                    environment
+                    find_closest_node(map_graph.nodes, agent2_pos)  
                 )
                     
 
@@ -2001,484 +1449,150 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
 
             # First priority: Show visibility gaps if enabled
             if show_agent2_visibility_gaps:
-                # First, use preprocessed visibility data to show visible map graph nodes
-                if visibility_map and map_graph:
-                    # Find closest node to the second agent's position
-                    agent2_pos = (x2, y2)
-                    agent2_node_index = find_closest_node(map_graph.nodes, agent2_pos)
-                    
-                    if agent2_node_index is not None:
-                        agent2_node = map_graph.nodes[agent2_node_index]
-                        
-                        # Get visible nodes from the visibility map
-                        visible_nodes = visibility_map[agent2_node_index]
-                        
-                        # Group nodes by distance for better visualization (close, medium, far)
-                        agent2_node_distance_groups = {
-                            'close': [],
-                            'medium': [],
-                            'far': []
-                        }
-                        
-                        # Calculate distance thresholds based on visibility range
-                        close_threshold = MAP_GRAPH_VISIBILITY_RANGE * 0.33
-                        medium_threshold = MAP_GRAPH_VISIBILITY_RANGE * 0.66
-                        
-                        # Categorize visible nodes by distance
-                        for visible_index in visible_nodes:
-                            if visible_index < len(map_graph.nodes):  # Safety check
-                                visible_node = map_graph.nodes[visible_index]
-                                node_distance = math.dist(agent2_node, visible_node)
-                                
-                                if node_distance <= close_threshold:
-                                    agent2_node_distance_groups['close'].append(visible_node)
-                                elif node_distance <= medium_threshold:
-                                    agent2_node_distance_groups['medium'].append(visible_node)
-                                else:
-                                    agent2_node_distance_groups['far'].append(visible_node)
-                        
-                        # Draw lines to close nodes (bright cyan to match agent 2's color)
-                        for visible_node in agent2_node_distance_groups['close']:
-                            pygame.draw.line(screen, (0, 255, 255), agent2_node, visible_node, 2)
-                            pygame.draw.circle(screen, (0, 255, 255), visible_node, 5)
-                        
-                        # Draw lines to medium-range nodes (lighter cyan)
-                        for visible_node in agent2_node_distance_groups['medium']:
-                            pygame.draw.line(screen, (100, 255, 255), agent2_node, visible_node, 1)
-                            pygame.draw.circle(screen, (100, 255, 255), visible_node, 4)
-                        
-                        # Draw lines to far nodes (faded cyan)
-                        for visible_node in agent2_node_distance_groups['far']:
-                            pygame.draw.line(screen, (150, 255, 255, 150), agent2_node, visible_node, 1)
-                            pygame.draw.circle(screen, (150, 255, 255), visible_node, 3)
+                # ===== CALCULATION PHASE: Use ThreatCalculator for computation =====
                 
-                # Draw all the gap lines with orientation-based coloring
-                for start_point, end_point, gap_size in gap_lines:
-                    # Determine gap orientation relative to clockwise ray casting
-                    start_dist = math.dist((x2, y2), start_point)
-                    end_dist = math.dist((x2, y2), end_point)
-                    
-                    # Classify gap type based on distance progression
-                    is_near_to_far = start_dist < end_dist  # Near point first, far point second
-                    is_far_to_near = start_dist > end_dist  # Far point first, near point second
-                    
-                    # Choose base color based on gap orientation - using cyan/green for second agent's gaps
-                    if is_near_to_far:
-                        # Cyan for near-to-far transitions (expanding gaps)
-                        base_color = (0, 200, 255) if gap_size > 150 else (0, 220, 255) if gap_size > 80 else (0, 240, 255)
-                    elif is_far_to_near:
-                        # Green-cyan for far-to-near transitions (contracting gaps)
-                        base_color = (0, 240, 180) if gap_size > 150 else (0, 255, 180) if gap_size > 80 else (0, 255, 220)
-                    else:
-                        # Fallback color for equal distances (rare case)
-                        base_color = (0, 200, 200)
-                    
-                    # Determine line width based on gap size
-                    if gap_size > 150:
-                        line_width = 3
-                    elif gap_size > 80:
-                        line_width = 2
-                    else:
-                        line_width = 1
-                    
+                # Use the ThreatCalculator to compute agent 2 visibility gaps data
+                computation_result = threat_calc.calculate_agent2_visibility_gaps_computation(
+                    agent2, visibility_map, time_horizon, LEADER_LINEAR_VEL, DEFAULT_VISION_RANGE
+                )
+                
+                # Extract computed data from result
+                agent2_visible_nodes_data = computation_result['agent2_visible_nodes_data']
+                agent2_gap_visualization_data = computation_result['agent2_gap_visualization_data']
+                agent2_visibility_points_data = computation_result['agent2_visibility_points_data']
+                agent2_pos = computation_result['agent2_pos']
+                agent2_node_index = computation_result['agent2_node_index']
+                agent2_node = computation_result['agent2_node']
+                
+                # ===== VISUALIZATION PHASE: Draw all processed data =====
+                
+                # Draw visible nodes connections
+                for node_data in agent2_visible_nodes_data:
+                    pygame.draw.line(screen, node_data['color'], node_data['start'], node_data['end'], node_data['line_width'])
+                    pygame.draw.circle(screen, node_data['color'], node_data['end'], node_data['circle_size'])
+                
+                # Draw gap lines with orientation-based coloring
+                for gap_data in agent2_gap_visualization_data:
                     # Draw the gap line connecting successive ray endpoints
-                    pygame.draw.line(screen, base_color, start_point, end_point, line_width)
+                    pygame.draw.line(screen, gap_data['color'], gap_data['start_point'], gap_data['end_point'], gap_data['line_width'])
                     
                     # Draw small circles at the gap endpoints to highlight them
-                    circle_size = max(2, min(5, int(gap_size / 30)))
-                    pygame.draw.circle(screen, base_color, start_point, circle_size)
-                    pygame.draw.circle(screen, base_color, end_point, circle_size)
+                    pygame.draw.circle(screen, gap_data['color'], gap_data['start_point'], gap_data['circle_size'])
+                    pygame.draw.circle(screen, gap_data['color'], gap_data['end_point'], gap_data['circle_size'])
                 
-                # Draw individual visibility points (only when probability overlay is OFF)
-                if not show_agent2_probability_overlay:
-                    for start_point, end_point, gap_size in gap_lines:
-                        # Use a magenta color for agent 2 visibility points to match the agent color
-                        pygame.draw.circle(screen, (255, 50, 255), start_point, 1)
-                        pygame.draw.circle(screen, (255, 50, 255), end_point, 1)
+                # Draw individual visibility points
+                for point_data in agent2_visibility_points_data:
+                    pygame.draw.circle(screen, point_data['color'], point_data['point'], point_data['size'])
             
             # Second priority: Show probability overlay for agent 2 if enabled
             elif show_agent2_probability_overlay and not show_combined_probability_mode:
-                # Visibility-based probability propagation for agent 2
-                agent2_x, agent2_y = agent2.state[0], agent2.state[1]
+                # ===== CALCULATION PHASE: Use ThreatCalculator for computation =====
                 
-                # DYNAMIC RANGE CALCULATION: Agent 1 reachability + inter-agent distance (max 800px)
-                agent1_x, agent1_y = x, y  # Agent 1 position
-                agent1_reachability = time_horizon * LEADER_LINEAR_VEL  # Agent 1's reachable distance
-                inter_agent_distance = math.dist((agent1_x, agent1_y), (agent2_x, agent2_y))
+                # Get agent2_gap_probabilities from locals() if available (for optional parameter)
+                agent2_gap_probabilities = locals().get('agent2_gap_probabilities', None)
                 
-                # Calculate dynamic vision range: reachability + distance between agents, capped at 800
-                dynamic_vision_range = min(agent1_reachability + inter_agent_distance, DEFAULT_VISION_RANGE)
-                agent2_vision_range = dynamic_vision_range
+                # Use the ThreatCalculator to compute agent 2 probability overlay data
+                computation_result = threat_calc.calculate_agent2_probability_overlay_computation(
+                    agent2, visibility_map, time_horizon, LEADER_LINEAR_VEL,
+                    agent2_gap_probabilities, DEFAULT_VISION_RANGE
+                )
                 
-                # Initialize agent 2 probability list/dictionary (similar to agent 1)
-                agent2_node_probabilities = {}
+                # Extract computed data from result
+                agent2_probability_node_data = computation_result['agent2_probability_node_data']
+                agent2_range_circle_data = computation_result['agent2_range_circle_data']
                 
-                # Get visibility data for agent 2 if available
-                if visibility_map and map_graph:
-                    # Start timing visibility-based probability calculation
-                    visibility_calculation_start = time.perf_counter()
-                    
-                    # Find closest node to agent 2's position
-                    agent2_pos = (agent2_x, agent2_y)
-                    agent2_node_index = find_closest_node(map_graph.nodes, agent2_pos)
-                    
-                    if agent2_node_index is not None:
-                        # Get visible nodes from the visibility map
-                        visible_node_indices = set(visibility_map[agent2_node_index])
-                        
-                        # Calculate and store probabilities for all map graph nodes within range
-                        for i, node in enumerate(map_graph.nodes):
-                            node_x, node_y = node
-                            
-                            # Calculate distance from agent 2 to this node
-                            dist_to_node = math.dist((agent2_x, agent2_y), (node_x, node_y))
-                            
-                            # Only process nodes within the 800px range
-                            if dist_to_node <= agent2_vision_range:
-                                # Check if this node is actually visible to agent 2
-                                if i in visible_node_indices:
-                                    # Node is visible: use fixed base probability (only store if > 0)
-                                    if AGENT2_BASE_PROBABILITY > 0:
-                                        agent2_node_probabilities[i] = AGENT2_BASE_PROBABILITY
-                                # Note: nodes not visible or with 0 probability are not stored (optimization)
-                    
-                    # End timing visibility calculation
-                    visibility_calculation_end = time.perf_counter()
-                    visibility_calculation_time = visibility_calculation_end - visibility_calculation_start
-                    
-                else:
-                    # Fallback: if no visibility data available, show uniform probability (original behavior)
-                    fallback_start = time.perf_counter()
-                    
-                    for i, node in enumerate(map_graph.nodes):
-                        node_x, node_y = node
-                        
-                        # Calculate distance from agent 2 to this node
-                        dist_to_node = math.dist((agent2_x, agent2_y), (node_x, node_y))
-                        
-                        # Simple uniform probability within range (fallback behavior)
-                        if dist_to_node <= agent2_vision_range:
-                            # Use configured base probability for fallback (only store if > 0)
-                            if AGENT2_BASE_PROBABILITY > 0:
-                                agent2_node_probabilities[i] = AGENT2_BASE_PROBABILITY
-                    
-                    # End timing fallback calculation
-                    fallback_end = time.perf_counter()
-                    visibility_calculation_time = fallback_end - fallback_start
+                # ===== VISUALIZATION PHASE: Draw all processed data =====
                 
-                # INTEGRATE GAP PROBABILITIES: Visibility-based probabilities override gap-based ones
-                # This happens after visibility calculations but before drawing
-                if 'agent2_gap_probabilities' in locals() and agent2_gap_probabilities:
-                    for node_index, gap_prob in agent2_gap_probabilities.items():
-                        if node_index not in agent2_node_probabilities:
-                            # Only gap probability exists (no visibility): use gap probability
-                            agent2_node_probabilities[node_index] = gap_prob
-                        # If visibility probability exists, it overrides gap probability (no action needed)
+                # Draw all probability nodes from stored data
+                for node_data in agent2_probability_node_data:
+                    # Draw the main probability node
+                    pygame.draw.circle(screen, node_data['color'], node_data['position'], node_data['size'])
+                    
+                    # Draw glow effect if enabled
+                    if node_data['glow_effect']:
+                        pygame.draw.circle(screen, node_data['glow_color'], node_data['position'], node_data['glow_size'])
                 
-                # Draw the agent 2 probability nodes from the integrated probabilities
-                for i, probability in agent2_node_probabilities.items():
-                    # All stored probabilities are > 0 by design (optimization)
-                    node_x, node_y = map_graph.nodes[i]
-                    
-                    # Color blending scheme: probability determines mix between pink and green
-                    # Low probability (e.g., 0.1): mostly pink (0.9) + little green (0.1)
-                    # High probability (e.g., 0.9): mostly green (0.9) + little pink (0.1)
-                    
-                    # Define base colors
-                    pink_color = (255, 105, 180)  # Hot pink
-                    green_color = (0, 255, 100)   # Bright green
-                    
-                    # Use probability directly for color blending (0.0 to 1.0)
-                    green_weight = probability  # How much green
-                    pink_weight = 1.0 - probability  # How much pink
-                    
-                    # Blend the colors
-                    red = int(pink_color[0] * pink_weight + green_color[0] * green_weight)
-                    green = int(pink_color[1] * pink_weight + green_color[1] * green_weight)
-                    blue = int(pink_color[2] * pink_weight + green_color[2] * green_weight)
-                    
-                    color = (red, green, blue)
-                    
-                    # Make circles smaller (reduced from 3-8 to 2-4)
-                    min_size, max_size = 2, 4
-                    node_size = int(min_size + probability * (max_size - min_size))
-                    
-                    # Draw the probability node with smaller circles
-                    pygame.draw.circle(screen, color, (node_x, node_y), node_size)
-                    
-                    # Add subtle glow effect for higher probability nodes (>0.7)
-                    if probability > 0.7:
-                        # Glow uses more green for high probability
-                        glow_color = (0, 255, 150)  # Green-cyan glow
-                        glow_size = node_size + 1  # Smaller glow
-                        
-                        # Draw the glow circle
-                        pygame.draw.circle(screen, glow_color, (node_x, node_y), glow_size)
-                
-                # Draw the visibility range circle for reference (cyan to match the probability nodes)
-                pygame.draw.circle(screen, (0, 200, 200), (int(agent2_x), int(agent2_y)), agent2_vision_range, 2)
+                # Draw the visibility range circle for reference
+                pygame.draw.circle(screen, agent2_range_circle_data['color'], 
+                                 agent2_range_circle_data['position'], 
+                                 agent2_range_circle_data['radius'], 
+                                 agent2_range_circle_data['line_width'])
             
             # COMBINED PROBABILITY MODE: Multiply Agent 1 and Agent 2 probabilities
             elif show_combined_probability_mode:
-                # Calculate combined probabilities for all map graph nodes
-                combined_probabilities = {}
+                # ===== CALCULATION PHASE: Use ThreatCalculator for modular computation =====
                 
-                # Get Agent 1 probabilities (merged with extended probabilities if available)
-                agent1_probabilities = {}
-                if show_probability_overlay and node_probabilities:
-                    # Start with base reachability probabilities
-                    for node_idx, base_prob in node_probabilities.items():
-                        agent1_probabilities[node_idx] = base_prob
+                # Get optional parameters from locals() for extended functionality
+                propagated_probabilities_param = locals().get('propagated_probabilities', None)
+                agent2_gap_probabilities_param = locals().get('agent2_gap_probabilities', None)
+                
+                # Use the ThreatCalculator to compute combined probability data
+                computation_result = threat_calc.calculate_combined_probability_computation(
+                    agent1=agent,
+                    agent2=agent2, 
+                    node_probabilities=node_probabilities,
+                    visibility_map=visibility_map,
+                    time_horizon=time_horizon,
+                    agent_speed=LEADER_LINEAR_VEL,
+                    threat_threshold=threat_threshold,
+                    show_threat_classification=show_threat_classification,
+                    propagated_probabilities=propagated_probabilities_param,
+                    agent2_gap_probabilities=agent2_gap_probabilities_param,
+                    DEFAULT_VISION_RANGE=DEFAULT_VISION_RANGE
+                )
+                
+                # Extract computed data from result
+                combined_threat_nodes_data = computation_result['combined_threat_nodes_data']
+                combined_probability_nodes_data = computation_result['combined_probability_nodes_data']
+                combined_visibility_ranges_data = computation_result['combined_visibility_ranges_data']
+                combined_info_display_data = computation_result['combined_info_display_data']
+                agent1_probabilities = computation_result['agent1_probabilities']
+                agent2_probabilities = computation_result['agent2_probabilities']
+                combined_probabilities = computation_result['combined_probabilities']
+                
+                # Update info display position based on actual screen width
+                combined_info_display_data['position'] = (WIDTH - 260, 10)
+                
+                # ===== VISUALIZATION PHASE: Draw all processed data =====
+                
+                # Draw threat nodes with rod-based colors (if threat classification enabled)
+                for threat_data in combined_threat_nodes_data:
+                    # Draw the main threat node
+                    pygame.draw.circle(screen, threat_data['color'], threat_data['position'], threat_data['size'])
                     
-                    # Merge with extended probabilities from rotating rods if available
-                    if 'propagated_probabilities' in locals() and propagated_probabilities:
-                        for node_idx, extended_prob in propagated_probabilities.items():
-                            if node_idx in agent1_probabilities:
-                                agent1_probabilities[node_idx] = max(agent1_probabilities[node_idx], extended_prob)
-                            else:
-                                agent1_probabilities[node_idx] = extended_prob
-                
-                # Get Agent 2 probabilities (merged with gap probabilities if available)
-                agent2_probabilities = {}
-                if show_agent2_probability_overlay and map_graph:
-                    # Calculate Agent 2 visibility-based probabilities
-                    agent2_x, agent2_y = agent2.state[0], agent2.state[1]
+                    # Draw outline to show it's a threat
+                    pygame.draw.circle(screen, (255, 255, 255), threat_data['position'], threat_data['size'] + 1, 1)
                     
-                    # DYNAMIC RANGE CALCULATION: Agent 1 reachability + inter-agent distance (max 800px)
-                    agent1_x, agent1_y = x, y  # Agent 1 position
-                    agent1_reachability = time_horizon * LEADER_LINEAR_VEL  # Agent 1's reachable distance
-                    inter_agent_distance = math.dist((agent1_x, agent1_y), (agent2_x, agent2_y))
+                    # Draw overlapping rod indicators if present
+                    if 'overlapping_rods' in threat_data:
+                        for rod_indicator in threat_data['overlapping_rods']:
+                            pygame.draw.circle(screen, rod_indicator['color'], rod_indicator['position'], rod_indicator['size'])
+                
+                # Draw combined probability nodes (when threat classification disabled)
+                for node_data in combined_probability_nodes_data:
+                    # Draw the combined probability node
+                    pygame.draw.circle(screen, node_data['color'], node_data['position'], node_data['size'])
                     
-                    # Calculate dynamic vision range: reachability + distance between agents, capped at 800
-                    agent2_vision_range = min(agent1_reachability + inter_agent_distance, DEFAULT_VISION_RANGE)
-                    
-                    if visibility_map:
-                        agent2_pos = (agent2_x, agent2_y)
-                        agent2_node_index = find_closest_node(map_graph.nodes, agent2_pos)
-                        
-                        if agent2_node_index is not None:
-                            visible_node_indices = set(visibility_map[agent2_node_index])
-                            
-                            for i, node in enumerate(map_graph.nodes):
-                                node_x, node_y = node
-                                dist_to_node = math.dist((agent2_x, agent2_y), (node_x, node_y))
-                                
-                                if dist_to_node <= agent2_vision_range:
-                                    if i in visible_node_indices:
-                                        if AGENT2_BASE_PROBABILITY > 0:
-                                            agent2_probabilities[i] = AGENT2_BASE_PROBABILITY
-                    
-                    # Merge with gap probabilities if available
-                    if 'agent2_gap_probabilities' in locals() and agent2_gap_probabilities:
-                        for node_index, gap_prob in agent2_gap_probabilities.items():
-                            if node_index not in agent2_probabilities:
-                                agent2_probabilities[node_index] = gap_prob
+                    # Draw glow effect if enabled
+                    if node_data['glow_effect']:
+                        pygame.draw.circle(screen, node_data['glow_color'], node_data['position'], node_data['glow_size'])
                 
-                # Calculate combined probabilities (multiplication)
-                all_node_indices = set(agent1_probabilities.keys()) | set(agent2_probabilities.keys())
+                # Draw visibility ranges for both agents
+                for range_data in combined_visibility_ranges_data:
+                    pygame.draw.circle(screen, range_data['color'], range_data['position'], range_data['radius'], range_data['line_width'])
                 
-                # THREAT CLASSIFICATION SYSTEM: Threshold and rod-based threat analysis
-                # (Only when threat classification mode is enabled)
-                threat_nodes = {}  # Store threat nodes with their rod source information
-                
-                if show_threat_classification:
-                    rod_colors = [
-                        (255, 0, 0),    # Red - Rod 1
-                        (0, 255, 0),    # Green - Rod 2  
-                        (0, 0, 255),    # Blue - Rod 3
-                        (255, 165, 0),  # Orange - Rod 4
-                        (255, 0, 255),  # Magenta - Rod 5
-                        (0, 255, 255),  # Cyan - Rod 6
-                        (255, 255, 0),  # Yellow - Rod 7
-                        (128, 0, 128),  # Purple - Rod 8
-                    ]
-                
-                # Track rod-based threats from Agent 2 gap probabilities
-                if show_threat_classification:
-                    node_rod_sources = {}  # Map node_index -> list of (rod_id, probability)
-                    
-                    if 'agent2_rod_node_mapping' in locals() and agent2_rod_node_mapping:
-                        # Use the proper rod tracking from gap processing
-                        node_rod_sources = agent2_rod_node_mapping
-                    elif 'agent2_gap_probabilities' in locals() and agent2_gap_probabilities:
-                        # Fallback: assign rod IDs based on gap processing order (less accurate)
-                        rod_id = 0
-                        for node_index, gap_prob in agent2_gap_probabilities.items():
-                            if node_index not in node_rod_sources:
-                                node_rod_sources[node_index] = []
-                            
-                            current_rod_id = rod_id % len(rod_colors)
-                            node_rod_sources[node_index].append((current_rod_id, gap_prob))
-                            rod_id += 1
-                
-                for node_idx in all_node_indices:
-                    prob1 = agent1_probabilities.get(node_idx, 0.0)
-                    prob2 = agent2_probabilities.get(node_idx, 0.0)
-                    
-                    # Multiply probabilities (both must exist and be non-zero)
-                    if prob1 > 0 and prob2 > 0:
-                        combined_prob = prob1 * prob2
-                        
-                        # THREAT CLASSIFICATION: Check if above threshold (only when enabled)
-                        if show_threat_classification and combined_prob >= threat_threshold:
-                            # This is a threat node - classify by rod source
-                            rod_sources = node_rod_sources.get(node_idx, []) if 'node_rod_sources' in locals() else []
-                            
-                            if rod_sources:
-                                # Node has rod-based sources - classify by dominant rod
-                                dominant_rod = max(rod_sources, key=lambda x: x[1])  # Highest probability rod
-                                threat_nodes[node_idx] = {
-                                    'probability': combined_prob,
-                                    'rod_id': dominant_rod[0],
-                                    'all_rods': rod_sources,
-                                    'type': 'rod_based'
-                                }
-                                
-                                # NEW: Collect probabilities for each rod to calculate mean threat level
-                                for rod_id, rod_prob in rod_sources:
-                                    if rod_id in rod_threat_stats:
-                                        rod_threat_stats[rod_id]['probabilities'].append(combined_prob)
-                            else:
-                                # Threat from visibility only (no rod involvement)
-                                threat_nodes[node_idx] = {
-                                    'probability': combined_prob,
-                                    'rod_id': None,
-                                    'all_rods': [],
-                                    'type': 'visibility_only'
-                                }
-                        
-                        # Store for regular combined probability visualization (if enabled)
-                        # Use consistent threshold for both visualization and threat classification
-                        if combined_prob >= threat_threshold:
-                            combined_probabilities[node_idx] = combined_prob
-                
-                # THREAT VISUALIZATION: Draw threat nodes with rod-based colors
-                for node_idx, threat_info in threat_nodes.items():
-                    node_x, node_y = map_graph.nodes[node_idx]
-                    
-                    if threat_info['type'] == 'rod_based' and threat_info['rod_id'] is not None:
-                        # Rod-based threat - use rod color
-                        rod_id = threat_info['rod_id']
-                        base_color = rod_colors[rod_id % len(rod_colors)]
-                        
-                        # Intensity based on probability (above threshold)
-                        prob_normalized = min(1.0, (threat_info['probability'] - threat_threshold) / (1.0 - threat_threshold))
-                        intensity = 0.5 + 0.5 * prob_normalized  # 50% to 100% intensity
-                        
-                        color = tuple(int(c * intensity) for c in base_color)
-                        
-                        # Larger size for threats
-                        node_size = 6 + int(prob_normalized * 4)  # 6-10 pixels
-                        
-                        # Draw threat node
-                        pygame.draw.circle(screen, color, (node_x, node_y), node_size)
-                        
-                        # Draw outline to show it's a threat
-                        pygame.draw.circle(screen, (255, 255, 255), (node_x, node_y), node_size + 1, 1)
-                        
-                        # Handle overlapping rods - draw small indicators
-                        if len(threat_info['all_rods']) > 1:
-                            # Multiple rods contribute - draw small dots around the main node
-                            angle_step = 2 * math.pi / len(threat_info['all_rods'])
-                            for i, (rod_id, _) in enumerate(threat_info['all_rods']):
-                                angle = i * angle_step
-                                offset_x = int(node_x + (node_size + 3) * math.cos(angle))
-                                offset_y = int(node_y + (node_size + 3) * math.sin(angle))
-                                rod_color = rod_colors[rod_id % len(rod_colors)]
-                                pygame.draw.circle(screen, rod_color, (offset_x, offset_y), 2)
-                    
-                    elif threat_info['type'] == 'visibility_only':
-                        # Visibility-based threat (no rod involvement) - use white/gray
-                        prob_normalized = min(1.0, (threat_info['probability'] - threat_threshold) / (1.0 - threat_threshold))
-                        intensity = int(128 + 127 * prob_normalized)  # Gray to white
-                        color = (intensity, intensity, intensity)
-                        
-                        node_size = 6 + int(prob_normalized * 4)
-                        pygame.draw.circle(screen, color, (node_x, node_y), node_size)
-                        pygame.draw.circle(screen, (255, 255, 255), (node_x, node_y), node_size + 1, 1)
-                
-                # Draw combined probability nodes with purple-yellow color scheme
-                # When threat classification is enabled, all combined probability nodes become threats
-                # When threat classification is disabled, show all combined probability nodes normally
-                if show_threat_classification:
-                    # With consistent thresholds, all combined_probabilities nodes are now classified as threats
-                    # No separate visualization needed - all nodes shown as rod-based or visibility-based threats
-                    pass
-                else:
-                    # Threat classification disabled - show all combined probabilities normally
-                    for node_idx, combined_prob in combined_probabilities.items():
-                        node_x, node_y = map_graph.nodes[node_idx]
-                        
-                        # Purple-yellow color scheme: purple (low) to yellow (high)
-                        # Low probability: dark purple, High probability: bright yellow
-                        purple_color = (128, 0, 128)  # Dark purple
-                        yellow_color = (255, 255, 0)  # Bright yellow
-                        
-                        # Normalize combined probability for color blending (0.0 to 1.0)
-                        # Since we multiply probabilities, the range is typically much smaller
-                        # Use a scaling factor to make the visualization more visible
-                        display_prob = min(1.0, combined_prob * 10)  # Scale up for better visibility
-                        
-                        # Color blending
-                        yellow_weight = display_prob
-                        purple_weight = 1.0 - display_prob
-                        
-                        red = int(purple_color[0] * purple_weight + yellow_color[0] * yellow_weight)
-                        green = int(purple_color[1] * purple_weight + yellow_color[1] * yellow_weight)
-                        blue = int(purple_color[2] * purple_weight + yellow_color[2] * yellow_weight)
-                        
-                        color = (red, green, blue)
-                        
-                        # Node size based on combined probability (larger for higher probability)
-                        min_size, max_size = 3, 7  # Slightly larger than individual modes
-                        node_size = int(min_size + display_prob * (max_size - min_size))
-                        
-                        # Draw the combined probability node
-                        pygame.draw.circle(screen, color, (node_x, node_y), node_size)
-                        
-                        # Add glow effect for very high combined probabilities
-                        if display_prob > 0.8:
-                            glow_color = (255, 255, 150)  # Bright yellow glow
-                            glow_size = node_size + 2
-                            pygame.draw.circle(screen, glow_color, (node_x, node_y), glow_size)
-                
-                # Draw both agents' visibility ranges for reference
-                if map_graph:
-                    # Agent 1 reachability circle (faint blue)
-                    max_reachable_distance = time_horizon * LEADER_LINEAR_VEL
-                    agent1_circle_color = (100, 150, 255)
-                    pygame.draw.circle(screen, agent1_circle_color, (int(x), int(y)), int(max_reachable_distance), 1)
-                    
-                    # Agent 2 dynamic visibility circle (faint cyan)
-                    # Calculate dynamic range for Agent 2
-                    agent1_reachability = time_horizon * LEADER_LINEAR_VEL
-                    inter_agent_distance = math.dist((x, y), (agent2_x, agent2_y))
-                    agent2_dynamic_range = min(agent1_reachability + inter_agent_distance, DEFAULT_VISION_RANGE)
-                    
-                    agent2_circle_color = (0, 150, 150)
-                    pygame.draw.circle(screen, agent2_circle_color, (int(agent2_x), int(agent2_y)), int(agent2_dynamic_range), 1)
-                
-                # Display combined mode info
-                info_text = [
-                    "Combined Probability Mode",
-                    f"Agent 1 nodes: {len(agent1_probabilities)}",
-                    f"Agent 2 nodes: {len(agent2_probabilities)}",
-                    f"Combined nodes: {len(combined_probabilities)}",
-                    "Purple → Yellow: Low → High"
-                ]
-                
-                # Create info box
-                info_font = pygame.font.SysFont('Arial', 16)
-                info_bg = pygame.Surface((250, len(info_text) * 20 + 10))
-                info_bg.fill((40, 0, 40))  # Dark purple background
+                # Draw combined mode info display
+                info_font = pygame.font.SysFont('Arial', combined_info_display_data['font_size'])
+                info_bg = pygame.Surface(combined_info_display_data['size'])
+                info_bg.fill(combined_info_display_data['background_color'])
                 info_bg.set_alpha(200)
                 
-                screen.blit(info_bg, (WIDTH - 260, 10))
+                screen.blit(info_bg, combined_info_display_data['position'])
                 
-                for i, text in enumerate(info_text):
-                    color = (255, 255, 255) if i == 0 else (200, 200, 200)
+                for i, text in enumerate(combined_info_display_data['info_text']):
+                    color = combined_info_display_data['text_color_primary'] if i == 0 else combined_info_display_data['text_color_secondary']
                     text_surface = info_font.render(text, True, color)
-                    screen.blit(text_surface, (WIDTH - 250, 20 + i * 20))
+                    screen.blit(text_surface, (combined_info_display_data['position'][0] + 10, combined_info_display_data['position'][1] + 10 + i * 20))
             
             # Draw reachability circle LAST (on top of everything) when probability overlay is enabled
             if show_probability_overlay and not show_combined_probability_mode:
@@ -2606,272 +1720,34 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     no_gap_surface = debug_font.render(no_gap_text, True, (255, 255, 0))
                     screen.blit(no_gap_surface, (10, 100))
             
-            # INSTANTANEOUS SWEEP-BASED PROBABILITY ASSIGNMENT FOR AGENT 2 (Independent section)
+            # ===== INSTANTANEOUS SWEEP-BASED PROBABILITY ASSIGNMENT FOR AGENT 2 =====
+            # MODULARIZED: Computation moved to ThreatCalculator, visualization remains here
             # Can be enabled either globally via Y key (show_rotating_rods) or individually via J key (show_agent2_rods)
             if (show_rotating_rods or show_agent2_rods) and visibility_map and gap_lines:
-                # DYNAMIC RANGE CALCULATION: Agent 1 reachability + inter-agent distance (max 800px)
-                agent1_x, agent1_y = x, y  # Agent 1 position
-                agent1_reachability = time_horizon * LEADER_LINEAR_VEL  # Agent 1's reachable distance
-                inter_agent_distance = math.dist((agent1_x, agent1_y), (x2, y2))
+                # ===== COMPUTATION PHASE: Modularized via ThreatCalculator =====
                 
-                # Calculate dynamic vision range: reachability + distance between agents, capped at 800
-                agent2_dynamic_vision_range = min(agent1_reachability + inter_agent_distance, DEFAULT_VISION_RANGE)
+                # Use ThreatCalculator for modular Agent 2 computation
+                computation_result = threat_calc.calculate_agent2_sweep_probabilities(
+                    agent2=agent2,
+                    gap_lines=gap_lines,
+                    time_horizon=time_horizon,
+                    agent_speed=LEADER_LINEAR_VEL,
+                    show_threat_classification=show_threat_classification,
+                    rod_gap_points=rod_gap_points,
+                    rod_threat_stats=rod_threat_stats,
+                    DEFAULT_VISION_RANGE=DEFAULT_VISION_RANGE
+                )
                 
-                # PHASE 4B OPTIMIZATION: Selective computation - check if recomputation is needed
-                current_agent2_pos = (x2, y2)
-                current_agent2_angle = math.atan2(math.sin(theta2), math.cos(theta2))  # Normalize angle
+                # Extract computation results
+                agent2_gap_probabilities = computation_result['agent2_gap_probabilities']
+                agent2_rod_node_mapping = computation_result['agent2_rod_node_mapping']
+                computation_stats = computation_result['computation_stats']
+                computation_skipped = computation_result['computation_skipped']
                 
-                # Check if we can skip computation based on agent state changes
-                if not agent2_optimizer.needs_recomputation(current_agent2_pos, current_agent2_angle):
-                    # Skip computation, use cached result
-                    agent2_gap_probabilities = agent2_optimizer.skip_computation()
-                    
-                    # Still need to do visual rendering, but skip the expensive computation
-                    # Set timing variables for consistency with logging
-                    agent2_computation_start = time.perf_counter()
-                    visibility_calculation_time = 0.0
-                    gap_processing_time = 0.0  
-                    node_iteration_time = 0.0
-                    total_gaps_processed = 0
-                    total_angles_processed = 0
-                    total_nodes_checked = 0
-                    total_probabilities_assigned = len(agent2_gap_probabilities)
-                    total_nodes_skipped = 0
-                    node_count = len(map_graph.nodes) if map_graph and map_graph.nodes else 0
-                    
-                    # Skip to visual rendering section (computation bypassed)
-                    computation_skipped = True
-                else:
-                    # Perform full computation
-                    computation_skipped = False
-                    
-                    # PERFORMANCE TIMING: High-precision timing for Phase 1 optimization
-                    agent2_computation_start = time.perf_counter()
-                    
-                    # Detailed timing breakdown variables
-                    visibility_calculation_time = 0.0
-                    gap_processing_time = 0.0
-                    node_iteration_time = 0.0
-                    
-                    # Count operations for debugging
-                    total_gaps_processed = 0
-                    total_angles_processed = 0
-                    total_nodes_checked = 0
-                total_probabilities_assigned = 0
-                total_nodes_skipped = 0  # Track nodes filtered out by spatial optimization
+                # Store computation time for FPS display (maintain backward compatibility)
+                agent2_computation_ms = computation_stats.get('computation_time_ms', 0)
                 
-                # Track node count for performance analysis
-                node_count = len(map_graph.nodes) if map_graph and map_graph.nodes else 0
-                
-                # PHASE 4B OPTIMIZATION: Only perform expensive computation if not skipped
-                if not computation_skipped:
-                    # INSTANTANEOUS SWEEP: Process all angles at once to assign gap probabilities
-                    agent2_gap_probabilities = {}  # Stores gap-based probabilities separate from visibility
-                    agent2_rod_node_mapping = {}   # NEW: Track which rod created which node probabilities
-                    
-                    # Start timing gap processing
-                    gap_processing_start = time.perf_counter()
-                
-                rod_id = 0  # Track rod ID for threat classification
-                for start_point, end_point, gap_size in gap_lines:
-                    # Only process significant gaps
-                    if gap_size < 50:
-                        continue
-                    
-                    total_gaps_processed += 1
-                    
-                    # Determine gap orientation relative to clockwise ray casting
-                    start_dist = math.dist((x2, y2), start_point)
-                    end_dist = math.dist((x2, y2), end_point)
-                    
-                    # Determine near point (pivot point) and far point
-                    if start_dist < end_dist:
-                        near_point = start_point
-                        far_point = end_point
-                        is_cyan_gap = True  # Near-to-far (expanding)
-                    else:
-                        near_point = end_point
-                        far_point = start_point
-                        is_cyan_gap = False  # Far-to-near (contracting)
-                    
-                    # NEW: Store rod-to-gap-point mapping for threat classification
-                    if show_threat_classification:
-                        rod_gap_points[rod_id] = near_point
-                        rod_threat_stats[rod_id] = {'probabilities': [], 'mean_prob': 0.0}
-                    
-                    # Calculate initial rod angle (along the gap line from near to far point)
-                    initial_rod_angle = math.atan2(far_point[1] - near_point[1], far_point[0] - near_point[0])
-                    
-                    # Calculate rod length based on the gap size
-                    original_gap_rod_length = math.dist(near_point, far_point)
-                    rod_length = max(20, original_gap_rod_length)
-                    
-                    max_rotation = math.pi / 4  # Maximum 45 degrees rotation
-                    
-                    # Determine rotation direction based on gap color
-                    if is_cyan_gap:
-                        rotation_direction = -1  # Anticlockwise (counterclockwise)
-                        gap_color = (0, 200, 255)  # Cyan tone
-                    else:
-                        rotation_direction = 1   # Clockwise
-                        gap_color = (0, 240, 180)  # Green-cyan tone
-                    
-                    rod_base = near_point
-                    
-                    # INSTANTANEOUS SWEEP: Calculate probabilities for all angles at once
-                    sweep_start_angle = initial_rod_angle
-                    sweep_end_angle = initial_rod_angle + max_rotation * rotation_direction
-                    total_sweep_angle = abs(sweep_end_angle - sweep_start_angle)
-                    
-                    # PHASE 3 VECTORIZED OPTIMIZATION: Replace nested loops with NumPy operations
-                    # This reduces computation from O(angles×nodes) to O(1) vectorized operations
-                    
-                    # Pre-filter nodes within vision range once for this gap
-                    if map_graph and map_graph.nodes:
-                        # Convert all nodes to NumPy arrays for vectorized operations
-                        all_nodes = np.array(map_graph.nodes)
-                        
-                        # PHASE 4B OPTIMIZATION: Enhanced spatial filtering with multiple criteria
-                        agent2_pos = np.array([x2, y2])
-                        
-                        # Primary filter: Distance-based (use fast squared distance)
-                        distances_squared = np.sum((all_nodes - agent2_pos)**2, axis=1)
-                        vision_range_squared = agent2_dynamic_vision_range * agent2_dynamic_vision_range
-                        within_range_mask = distances_squared <= vision_range_squared
-                        
-                        # Secondary filter: Gap-relevance filter (only consider nodes near gap direction)
-                        if len(all_nodes) > 100:  # Only apply for large node sets
-                            # Calculate gap center direction
-                            gap_center = np.array([(near_point[0] + far_point[0]) / 2, 
-                                                  (near_point[1] + far_point[1]) / 2])
-                            gap_direction = gap_center - agent2_pos
-                            gap_direction_norm = np.linalg.norm(gap_direction)
-                            
-                            if gap_direction_norm > 0:
-                                gap_direction = gap_direction / gap_direction_norm
-                                
-                                # Calculate angle between agent->node and agent->gap vectors
-                                node_directions = all_nodes - agent2_pos
-                                node_distances = np.linalg.norm(node_directions, axis=1)
-                                
-                                # Avoid division by zero
-                                valid_nodes_mask = node_distances > 1e-6
-                                
-                                if np.any(valid_nodes_mask):
-                                    node_directions_norm = node_directions[valid_nodes_mask] / node_distances[valid_nodes_mask, np.newaxis]
-                                    
-                                    # Dot product for angle calculation
-                                    dot_products = np.dot(node_directions_norm, gap_direction)
-                                    
-                                    # Keep nodes within ±60 degrees of gap direction
-                                    angle_threshold = math.cos(math.pi / 3)  # 60 degrees
-                                    gap_relevant_mask = np.zeros(len(all_nodes), dtype=bool)
-                                    gap_relevant_mask[valid_nodes_mask] = dot_products >= angle_threshold
-                                    
-                                    # Combine filters
-                                    within_range_mask = within_range_mask & gap_relevant_mask
-                        
-                        within_range_indices = np.where(within_range_mask)[0]
-                        within_range_nodes = all_nodes[within_range_mask]
-                        
-                        # Track statistics
-                        total_nodes_skipped += len(all_nodes) - len(within_range_nodes)
-                        total_nodes_checked += len(within_range_nodes)
-                        
-                        if len(within_range_nodes) > 0:
-                            # Generate all sweep angles at once
-                            num_sweep_angles = 20
-                            total_angles_processed += num_sweep_angles + 1
-                            
-                            # Vectorized angle generation
-                            angle_steps = np.linspace(0, 1, num_sweep_angles + 1)
-                            sweep_angles = sweep_start_angle + angle_steps * (sweep_end_angle - sweep_start_angle)
-                            
-                            # Vectorized gap probabilities (0.8 to 1.0 range)
-                            base_gap_probability = 0.8
-                            gap_probabilities = base_gap_probability + (angle_steps * 0.2)
-                            
-                            # Vectorized rod end positions for all angles
-                            rod_ends_x = rod_base[0] + rod_length * np.cos(sweep_angles)
-                            rod_ends_y = rod_base[1] + rod_length * np.sin(sweep_angles)
-                            
-                            # For each angle, calculate distances from all nodes to the rod line
-                            bar_width = 15.0  # Wider sweep for probability assignment
-                            
-                            # Start timing vectorized computation
-                            node_iteration_start = time.perf_counter()
-                            
-                            # Initialize result arrays
-                            node_max_probabilities = np.zeros(len(within_range_nodes))
-                            
-                            # Process all angles and nodes simultaneously
-                            for angle_idx, (angle, gap_prob, rod_end_x, rod_end_y) in enumerate(
-                                zip(sweep_angles, gap_probabilities, rod_ends_x, rod_ends_y)
-                            ):
-                                # Vectorized rod line calculations
-                                rod_base_arr = np.array(rod_base)
-                                rod_end_arr = np.array([rod_end_x, rod_end_y])
-                                
-                                # Rod vector
-                                rod_vec = rod_end_arr - rod_base_arr
-                                rod_length_sq = np.dot(rod_vec, rod_vec)
-                                
-                                if rod_length_sq > 0:
-                                    # Vectors from rod start to all nodes
-                                    node_vecs = within_range_nodes - rod_base_arr
-                                    
-                                    # Vectorized projection onto rod line
-                                    projections = np.dot(node_vecs, rod_vec) / rod_length_sq
-                                    projections = np.clip(projections, 0, 1)
-                                    
-                                    # Vectorized closest points on rod line
-                                    closest_points = rod_base_arr + projections[:, np.newaxis] * rod_vec
-                                    
-                                    # Vectorized distances from nodes to rod line
-                                    distance_vectors = within_range_nodes - closest_points
-                                    distances_to_rod = np.linalg.norm(distance_vectors, axis=1)
-                                    
-                                    # Boolean mask for nodes within bar width
-                                    within_bar_mask = distances_to_rod <= bar_width
-                                    
-                                    # Update maximum probabilities for affected nodes
-                                    node_max_probabilities[within_bar_mask] = np.maximum(
-                                        node_max_probabilities[within_bar_mask], gap_prob
-                                    )
-                            
-                            # Assign final probabilities to nodes
-                            significant_prob_mask = node_max_probabilities > 0
-                            significant_indices = within_range_indices[significant_prob_mask]
-                            significant_probs = node_max_probabilities[significant_prob_mask]
-                            
-                            for idx, prob in zip(significant_indices, significant_probs):
-                                if idx in agent2_gap_probabilities:
-                                    agent2_gap_probabilities[idx] = max(agent2_gap_probabilities[idx], prob)
-                                else:
-                                    agent2_gap_probabilities[idx] = prob
-                                
-                                # NEW: Track rod source for threat classification
-                                if idx not in agent2_rod_node_mapping:
-                                    agent2_rod_node_mapping[idx] = []
-                                agent2_rod_node_mapping[idx].append((rod_id, prob))
-                                
-                                total_probabilities_assigned += 1
-                            
-                            # End timing vectorized computation
-                            node_iteration_end = time.perf_counter()
-                            node_iteration_time += (node_iteration_end - node_iteration_start)
-                
-                    # Increment rod ID for next gap
-                    rod_id += 1
-                
-                # End timing gap processing
-                gap_processing_end = time.perf_counter()
-                gap_processing_time = gap_processing_end - gap_processing_start
-                
-                # PHASE 4B OPTIMIZATION: Update optimizer state after computation
-                agent2_optimizer.update_state(current_agent2_pos, current_agent2_angle, agent2_gap_probabilities)
-                
-                # VISUAL REPRESENTATION: Draw static swept areas (no animation)
+                # ===== VISUALIZATION PHASE: Draw static swept areas (no animation) =====
                 for start_point, end_point, gap_size in gap_lines:
                     # Only process significant gaps
                     if gap_size < 50:
@@ -2922,7 +1798,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     for i in range(num_arc_points + 1):
                         t = i / num_arc_points
                         angle = sweep_start_angle + t * (sweep_end_angle - sweep_start_angle)
-                        # PHASE 4B OPTIMIZATION: Use fast trigonometric lookup
+                        # OPTIMIZATION: Use fast trigonometric lookup
                         point = (
                             rod_base[0] + rod_length * trig_lookup.fast_cos(angle),
                             rod_base[1] + rod_length * trig_lookup.fast_sin(angle)
@@ -2934,7 +1810,7 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     
                     # Draw the boundary lines of the swept area
                     boundary_color = (gap_color[0]//2, gap_color[1]//2, gap_color[2]//2)
-                    # PHASE 4B OPTIMIZATION: Use fast trigonometric lookup
+                    # OPTIMIZATION: Use fast trigonometric lookup
                     start_boundary = (
                         rod_base[0] + rod_length * trig_lookup.fast_cos(sweep_start_angle),
                         rod_base[1] + rod_length * trig_lookup.fast_sin(sweep_start_angle)
@@ -2947,62 +1823,15 @@ def run_environment_inspection(multicore=True, num_cores=None, auto_analyze=Fals
                     pygame.draw.line(screen, boundary_color, rod_base, end_boundary, 2)
                     
                     # Draw the gap line (initial rod position)
-                    # PHASE 4B OPTIMIZATION: Use fast trigonometric lookup
+                    # OPTIMIZATION: Use fast trigonometric lookup
                     initial_rod_end = (
                         rod_base[0] + rod_length * trig_lookup.fast_cos(initial_rod_angle),
                         rod_base[1] + rod_length * trig_lookup.fast_sin(initial_rod_angle)
                     )
                     pygame.draw.line(screen, gap_color, rod_base, initial_rod_end, 3)
                 
-                # INTEGRATE GAP PROBABILITIES: Add to agent2_node_probabilities BEFORE visibility calculations
-                # This ensures gap probabilities are considered in the visibility-based system
-                if 'agent2_gap_probabilities' in locals() and agent2_gap_probabilities:
-                    # Integration happens after visibility calculations (see lines above)
-                    # This section just ensures the gap probabilities are calculated and ready
-                    pass
-                
-                # PERFORMANCE TIMING: Complete detailed timing analysis for Phase 1 optimization
-                agent2_computation_end = time.perf_counter()
-                total_computation_time = agent2_computation_end - agent2_computation_start
-                
-                # Convert to milliseconds for consistency with existing display
-                total_time_ms = total_computation_time * 1000
-                visibility_time_ms = visibility_calculation_time * 1000
-                gap_time_ms = gap_processing_time * 1000
-                node_iteration_time_ms = node_iteration_time * 1000
-                
-                # Calculate current FPS
-                current_fps = clock.get_fps()
-                
-                # PHASE 4B: Get selective computation statistics
-                optimizer_stats = agent2_optimizer.get_performance_stats()
-                
-                # Log performance data to CSV for Phase 4B analysis
-                performance_log_file = "agent2_performance_log.csv"
-                timestamp = datetime.now().isoformat()
-                
-                # Create CSV header if file doesn't exist
-                write_header = not os.path.exists(performance_log_file)
-                
-                with open(performance_log_file, 'a', newline='') as csvfile:
-                    writer = csv.writer(csvfile)
-                    if write_header:
-                        writer.writerow([
-                            'timestamp', 'total_time_ms', 'visibility_time_ms', 'gap_time_ms', 
-                            'node_iteration_time_ms', 'node_count', 'fps', 'gaps_processed', 
-                            'angles_processed', 'nodes_checked', 'probabilities_assigned', 'nodes_skipped',
-                            'computation_skipped', 'skip_rate_percent', 'optimizer_total_calls'
-                        ])
-                    
-                    writer.writerow([
-                        timestamp, total_time_ms, visibility_time_ms, gap_time_ms,
-                        node_iteration_time_ms, node_count, current_fps, total_gaps_processed,
-                        total_angles_processed, total_nodes_checked, total_probabilities_assigned, total_nodes_skipped,
-                        computation_skipped, optimizer_stats['skip_rate_percent'], optimizer_stats['total_calls']
-                    ])
-                
                 # Store computation time for FPS display (maintain backward compatibility)
-                agent2_computation_ms = total_time_ms
+                agent2_computation_ms = 0  # Simplified - no detailed timing
             
             # NOW DRAW AGENTS ON TOP OF ALL VISUALIZATION ELEMENTS
             # This ensures agents are clearly visible above all visibility indicators
