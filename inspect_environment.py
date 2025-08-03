@@ -4,19 +4,19 @@ Run the environment inspection tool.
 This script launches a visualization of just the environment without any agents.
 
 🎯 OPTIMIZATION PROJECT ENTRY POINT 🎯
-Agent 2 probability generation optimization is currently in progress.
+Agent 2 probability generation optimization.
 
-CURRENT STATUS: Phase 4B Validation Complete → Phase 4C Ready (Advanced Optimizations)
+CURRENT STATUS: Optimization System Complete
 
 📋 OPTIMIZATION DOCUMENTATION:
 - PRIMARY PLAN: docs/optimization/agent2_optimization_plan.md (active, concise <100 lines)
-- PHASE 1 RESULTS: docs/optimization/PHASE1_COMPLETION_SUMMARY.md (detailed findings)
+- RESULTS: docs/optimization/PHASE1_COMPLETION_SUMMARY.md (detailed findings)
 - HISTORICAL CONTEXT: docs/optimization/agent2_optimization_archive.md (full background)
 - PERFORMANCE DATA: docs/optimization/agent2_performance_log.csv (live measurements)
 
 🎯 TARGET: Lines 2649-2860 in environment_inspection_simulation.py
-   Phase 4B COMPLETE: 150ms → 132ms (12% improvement) + 50% skip rate achieved
-   Phase 4C GOAL: 132ms → <50ms (spatial indexing, aggressive optimizations)
+   COMPLETE: 150ms → 132ms (12% improvement) + 50% skip rate achieved
+   GOAL: 132ms → <50ms (spatial indexing, aggressive optimizations)
 
 🔧 TEST PROCEDURE: python inspect_environment.py → Press 'J' → Move with WASD
    Monitor FPS panel for "Agent 2 computation: X ms" timing
@@ -142,6 +142,8 @@ if __name__ == "__main__":
     print("       Uses same threshold (0.1) as combined mode - all colored nodes become threats")
     print("       Rod colors: Red, Green, Blue, Orange, Magenta, Cyan, Yellow, Purple")
     print("       White nodes: Visibility-only threats, Multiple dots: Overlapping rods")
+    print("       Shows mean threat probability for each gap next to gap points")
+    print("       Format: 'Rod X: 0.XXX (count)' - mean probability and threat count per rod")
     print("       All nodes shown in M mode will be classified as threats in U mode")
     print("    Z: Auto-enable agent 1 features (F+O+B+Y+H) - Simplified shortcut")
     print("    X: Complete dual-agent system (Z+G+M) - Ultimate visualization mode")

@@ -43,7 +43,6 @@ if __name__ == "__main__":
     print("    Yellow path: Graph-based shortest path")
     print("    Cyan dashed path: Dynamically feasible path respecting agent motion constraints")
     print("  Other:")
-    print("    F: Toggle agent-following mode")
     print("    O: Toggle probability overlay (light blue-red color blend, colors nodes based on reachability within time horizon)")
     print("    B: Toggle visibility gaps for first agent (ray casting discontinuities)")
     print("       Blue: Near-to-far transitions, Violet: Far-to-near transitions")

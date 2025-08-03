@@ -13,4 +13,4 @@ dependencies:
     - PyOpenGL 
     - PyOpenGL_accelerate
     - scipy
-    - torch
+    - torch 
