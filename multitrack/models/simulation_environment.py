@@ -17,7 +17,7 @@ class SimulationEnvironment:
         scale_x = width / 1400
         scale_y = height / 1000
         
-        # Room layout: outer walls
+        # Room layout: outer walls (no doors in outer walls, so these remain unchanged)
         self.outer_walls = [
             pygame.Rect(int(50 * scale_x), int(50 * scale_y), 
                        int(1300 * scale_x), int(10 * scale_y)),     # Top wall
@@ -29,46 +29,102 @@ class SimulationEnvironment:
                        int(1300 * scale_x), int(10 * scale_y))     # Bottom wall
         ]
         
-        # Inner walls to create rooms - original area preserved
+        # Inner walls - SPLIT at door intersections to create gaps
         self.inner_walls = [
-            # Original house section (unchanged rooms)
+            # Upper left room divider - SPLIT for door at (200, 300, 70x10)
             pygame.Rect(int(50 * scale_x), int(300 * scale_y), 
-                       int(400 * scale_x), int(10 * scale_y)),     # Upper left room divider
-            pygame.Rect(int(550 * scale_x), int(300 * scale_y), 
-                       int(400 * scale_x), int(10 * scale_y)),    # Upper right room divider
-            pygame.Rect(int(300 * scale_x), int(500 * scale_y), 
-                       int(500 * scale_x), int(10 * scale_y)),    # Lower middle room divider
-            pygame.Rect(int(450 * scale_x), int(50 * scale_y), 
-                       int(10 * scale_x), int(250 * scale_y)),     # Upper room divider
-            pygame.Rect(int(700 * scale_x), int(50 * scale_y), 
-                       int(10 * scale_x), int(250 * scale_y)),     # Upper right room divider
-            pygame.Rect(int(300 * scale_x), int(300 * scale_y), 
-                       int(10 * scale_x), int(200 * scale_y)),     # Middle left room divider
-            pygame.Rect(int(550 * scale_x), int(500 * scale_y), 
-                       int(10 * scale_x), int(240 * scale_y)),    # Lower right room divider
+                       int(150 * scale_x), int(10 * scale_y)),     # Left segment: 50-200
+            pygame.Rect(int(270 * scale_x), int(300 * scale_y), 
+                       int(180 * scale_x), int(10 * scale_y)),     # Right segment: 270-450
             
-            # New wing dividers
+            # Upper right room divider - SPLIT for door at (650, 300, 70x10)
+            pygame.Rect(int(550 * scale_x), int(300 * scale_y), 
+                       int(100 * scale_x), int(10 * scale_y)),     # Left segment: 550-650
+            pygame.Rect(int(720 * scale_x), int(300 * scale_y), 
+                       int(230 * scale_x), int(10 * scale_y)),     # Right segment: 720-950
+            
+            # Lower middle room divider - SPLIT for doors at (420, 500, 70x10) and (650, 500, 70x10)
+            pygame.Rect(int(300 * scale_x), int(500 * scale_y), 
+                       int(120 * scale_x), int(10 * scale_y)),     # Left segment: 300-420
+            pygame.Rect(int(490 * scale_x), int(500 * scale_y), 
+                       int(160 * scale_x), int(10 * scale_y)),     # Middle segment: 490-650
+            pygame.Rect(int(720 * scale_x), int(500 * scale_y), 
+                       int(80 * scale_x), int(10 * scale_y)),      # Right segment: 720-800
+            
+            # Upper room divider - SPLIT for door at (450, 150, 10x70)
+            pygame.Rect(int(450 * scale_x), int(50 * scale_y), 
+                       int(10 * scale_x), int(100 * scale_y)),     # Upper segment: 50-150
+            pygame.Rect(int(450 * scale_x), int(220 * scale_y), 
+                       int(10 * scale_x), int(80 * scale_y)),      # Lower segment: 220-300
+            
+            # Upper right room divider - SPLIT for door at (700, 150, 10x70)
+            pygame.Rect(int(700 * scale_x), int(50 * scale_y), 
+                       int(10 * scale_x), int(100 * scale_y)),     # Upper segment: 50-150
+            pygame.Rect(int(700 * scale_x), int(220 * scale_y), 
+                       int(10 * scale_x), int(80 * scale_y)),      # Lower segment: 220-300
+            
+            # Middle left room divider - SPLIT for door at (300, 380, 10x70)
+            pygame.Rect(int(300 * scale_x), int(300 * scale_y), 
+                       int(10 * scale_x), int(80 * scale_y)),      # Upper segment: 300-380
+            pygame.Rect(int(300 * scale_x), int(450 * scale_y), 
+                       int(10 * scale_x), int(50 * scale_y)),      # Lower segment: 450-500
+            
+            # Lower right room divider - SPLIT for door at (550, 600, 10x70)
+            pygame.Rect(int(550 * scale_x), int(500 * scale_y), 
+                       int(10 * scale_x), int(100 * scale_y)),     # Upper segment: 500-600
+            pygame.Rect(int(550 * scale_x), int(670 * scale_y), 
+                       int(10 * scale_x), int(70 * scale_y)),      # Lower segment: 670-740
+            
+            # Main vertical divider - upper section - SPLIT for doors at (950, 150, 10x70) and (950, 400, 10x70)
             pygame.Rect(int(950 * scale_x), int(50 * scale_y), 
-                       int(10 * scale_x), int(450 * scale_y)),     # Main vertical divider - upper section
+                       int(10 * scale_x), int(100 * scale_y)),     # Top segment: 50-150
+            pygame.Rect(int(950 * scale_x), int(220 * scale_y), 
+                       int(10 * scale_x), int(180 * scale_y)),     # Middle segment: 220-400
+            pygame.Rect(int(950 * scale_x), int(470 * scale_y), 
+                       int(10 * scale_x), int(130 * scale_y)),     # Bottom segment: 470-600
+            
+            # Main vertical divider - lower section - SPLIT for door at (950, 800, 10x70)
             pygame.Rect(int(950 * scale_x), int(600 * scale_y), 
-                       int(10 * scale_x), int(340 * scale_y)),    # Main vertical divider - lower section
+                       int(10 * scale_x), int(200 * scale_y)),     # Upper segment: 600-800
+            pygame.Rect(int(950 * scale_x), int(870 * scale_y), 
+                       int(10 * scale_x), int(70 * scale_y)),      # Lower segment: 870-940
+            
+            # Upper divider in new wing - SPLIT for door at (1050, 300, 70x10)
             pygame.Rect(int(950 * scale_x), int(300 * scale_y), 
-                       int(400 * scale_x), int(10 * scale_y)),    # Upper divider in new wing
+                       int(100 * scale_x), int(10 * scale_y)),     # Left segment: 950-1050
+            pygame.Rect(int(1120 * scale_x), int(300 * scale_y), 
+                       int(230 * scale_x), int(10 * scale_y)),     # Right segment: 1120-1350
+            
+            # Middle divider in new wing - SPLIT for door at (1050, 500, 70x10)
             pygame.Rect(int(950 * scale_x), int(500 * scale_y), 
-                       int(400 * scale_x), int(10 * scale_y)),    # Middle divider in new wing
+                       int(100 * scale_x), int(10 * scale_y)),     # Left segment: 950-1050
+            pygame.Rect(int(1120 * scale_x), int(500 * scale_y), 
+                       int(230 * scale_x), int(10 * scale_y)),     # Right segment: 1120-1350
+            
+            # Lower divider in new wing - SPLIT for door at (1050, 700, 70x10)
             pygame.Rect(int(950 * scale_x), int(700 * scale_y), 
-                       int(400 * scale_x), int(10 * scale_y)),    # Lower divider in new wing
+                       int(100 * scale_x), int(10 * scale_y)),     # Left segment: 950-1050
+            pygame.Rect(int(1120 * scale_x), int(700 * scale_y), 
+                       int(230 * scale_x), int(10 * scale_y)),     # Right segment: 1120-1350
+            
+            # Upper vertical divider in new wing - SPLIT for door at (1150, 400, 10x70)
             pygame.Rect(int(1150 * scale_x), int(300 * scale_y), 
-                       int(10 * scale_x), int(200 * scale_y)),   # Upper vertical divider in new wing
+                       int(10 * scale_x), int(100 * scale_y)),     # Upper segment: 300-400
+            pygame.Rect(int(1150 * scale_x), int(470 * scale_y), 
+                       int(10 * scale_x), int(30 * scale_y)),      # Lower segment: 470-500
+            
+            # Lower vertical divider in new wing - SPLIT for door at (1150, 600, 10x70)
             pygame.Rect(int(1150 * scale_x), int(500 * scale_y), 
-                       int(10 * scale_x), int(200 * scale_y)),   # Lower vertical divider in new wing
+                       int(10 * scale_x), int(100 * scale_y)),     # Upper segment: 500-600
+            pygame.Rect(int(1150 * scale_x), int(670 * scale_y), 
+                       int(10 * scale_x), int(30 * scale_y)),      # Lower segment: 670-700
         ]
         
-        # Doors (gaps in walls)
+        # Doors (now separate from walls - no overlaps)
         self.doors = [
-            # Original house doors (unchanged)
-            pygame.Rect(int(480 * scale_x), int(300 * scale_y), 
-                       int(70 * scale_x), int(10 * scale_y)),     # Door between bedrooms
+            # Note: "Door between bedrooms" at (480, 300, 70x10) was removed as it didn't intersect any walls
+            
+            # Original house doors
             pygame.Rect(int(300 * scale_x), int(380 * scale_y), 
                        int(10 * scale_x), int(70 * scale_y)),     # Door to living room
             pygame.Rect(int(550 * scale_x), int(600 * scale_y), 
