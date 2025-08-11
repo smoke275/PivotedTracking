@@ -454,7 +454,7 @@ def show_visualization():
     # Load data
     environment_lines = []
     breakoff_lines = []
-    agent_x, agent_y = 735.5, 314.4
+    agent_x, agent_y = 951.4, 594.8
     visibility_range = 200.0
     
     with open('test_env2.txt', 'r') as f:

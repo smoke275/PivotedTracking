@@ -550,10 +550,13 @@ class IntersectionGraph:
         
         # Find all outgoing edges (except the one we came from)
         candidate_edges = []
-        
+
         for edge_id, edge_data in self.edges.items():
             if edge_id == incoming_edge_id:
                 continue  # Skip the edge we came from
+            # Skip edge if it connects back to the previous node (prevents immediate reversal)
+            if (edge_data['from_node'] == prev_node_id or edge_data['to_node'] == prev_node_id):
+                continue
             
             if edge_data['from_node'] == current_node_id:
                 next_node_id = edge_data['to_node']

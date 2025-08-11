@@ -112,7 +112,11 @@ public:
         }
         struct Cand { int edge_id; double angle; double cross; }; std::vector<Cand> cands; cands.reserve(8);
         for (auto &kv : edges_) {
-            const Edge &e = kv.second; if (e.id == incoming_edge_id) continue; int next_node_id; if (e.from_node == current_node_id) next_node_id = e.to_node; else if (e.to_node == current_node_id) next_node_id = e.from_node; else continue; const Node &nextN = nodes_.at(next_node_id);
+            const Edge &e = kv.second;
+            if (e.id == incoming_edge_id) continue;
+            int next_node_id = (e.from_node == current_node_id) ? e.to_node : (e.to_node == current_node_id ? e.from_node : -1);
+            if (next_node_id < 0 || next_node_id == prev_node_id) continue;
+            const Node &nextN = nodes_.at(next_node_id);
             double outgoing_vec_x; double outgoing_vec_y;
             if (e.type == "arc") {
                 double radial_x = current.x - e.center_x; double radial_y = current.y - e.center_y; double radial_len = std::sqrt(radial_x*radial_x + radial_y*radial_y); if (radial_len == 0) continue; radial_x /= radial_len; radial_y /= radial_len; double t1x = -radial_y, t1y = radial_x; double t2x = radial_y, t2y = -radial_x; double chord_x = nextN.x - current.x; double chord_y = nextN.y - current.y; double chord_len = std::sqrt(chord_x*chord_x + chord_y*chord_y); if (chord_len > 0) { chord_x /= chord_len; chord_y /= chord_len; } double dot1 = t1x*chord_x + t1y*chord_y; double dot2 = t2x*chord_x + t2y*chord_y; if (dot1 > dot2) { outgoing_vec_x = t1x; outgoing_vec_y = t1y; } else { outgoing_vec_x = t2x; outgoing_vec_y = t2y; }
