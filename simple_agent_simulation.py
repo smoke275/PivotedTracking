@@ -46,54 +46,14 @@ from path_trajectory_optimizer import (initialize_trajectory_integrator, generat
                                      initialize_trajectory_calculator, get_trajectory_calculator,
                                      calculate_all_travel_times)
 
-# Import risk calculator for reachability analysis
-from risk_calculator import load_reachability_mask, get_reachability_probabilities_for_fixed_grid
+# Import risk calculator for reachability analysis and visibility calculations
+from risk_calculator import (load_reachability_mask, get_reachability_probabilities_for_fixed_grid,
+                            calculate_evader_visibility, get_visibility_statistics, calculate_visibility_sectors,
+                            detect_visibility_breakoff_points)
 
-# Import vision system for visibility calculations
-from multitrack.utils.vision import cast_vision_ray
-
-def calculate_evader_visibility(agent_x, agent_y, visibility_range, walls, doors, num_rays=72):
+def draw_evader_visibility(screen, agent_x, agent_y, visibility_data, show_rays=True, show_visibility_area=True, agent_theta=None):
     """
-    Calculate 360-degree visibility for the evader by shooting rays in all directions.
-    
-    Args:
-        agent_x, agent_y: Evader position
-        visibility_range: Maximum visibility distance
-        walls: List of wall rectangles that block vision
-        doors: List of door rectangles that allow vision through
-        num_rays: Number of rays to cast (higher = more accurate)
-        
-    Returns:
-        List of (angle, endpoint, distance, blocked) tuples where:
-        - angle: Ray angle in radians
-        - endpoint: (x, y) where ray ends
-        - distance: Distance from agent to endpoint
-        - blocked: True if ray hit a wall, False if reached max range
-    """
-    visibility_data = []
-    angle_step = (2 * math.pi) / num_rays
-    
-    for i in range(num_rays):
-        angle = i * angle_step
-        
-        # Cast ray in this direction
-        endpoint = cast_vision_ray(
-            agent_x, agent_y, angle, visibility_range, walls, doors
-        )
-        
-        # Calculate distance to endpoint
-        distance = math.sqrt((endpoint[0] - agent_x)**2 + (endpoint[1] - agent_y)**2)
-        
-        # Check if ray was blocked (distance less than max range)
-        blocked = distance < visibility_range - 1  # Small tolerance
-        
-        visibility_data.append((angle, endpoint, distance, blocked))
-    
-    return visibility_data
-
-def draw_evader_visibility(screen, agent_x, agent_y, visibility_data, show_rays=True, show_visibility_area=True):
-    """
-    Draw the evader's visibility on screen.
+    Draw the evader's visibility on screen with orientation-based breakoff point coloring.
     
     Args:
         screen: Pygame screen to draw on
@@ -101,6 +61,7 @@ def draw_evader_visibility(screen, agent_x, agent_y, visibility_data, show_rays=
         visibility_data: List from calculate_evader_visibility()
         show_rays: Whether to show individual rays
         show_visibility_area: Whether to show the visibility polygon
+        agent_theta: Agent orientation in radians (for breakoff point orientation coloring)
     """
     if not visibility_data:
         return
@@ -109,6 +70,54 @@ def draw_evader_visibility(screen, agent_x, agent_y, visibility_data, show_rays=
     ray_color = (0, 255, 255, 100)      # Cyan, semi-transparent
     blocked_ray_color = (255, 100, 100, 150)  # Red, more visible
     visibility_color = (0, 255, 255, 30)     # Light cyan, very transparent
+    breakoff_color = (255, 255, 0, 200)     # Yellow, highly visible for breakoff points
+    breakoff_line_color = (255, 165, 0, 180) # Orange for breakoff lines
+    
+    # Colors for 4 categories of breakoff points based on orientation and distance transition
+    category_colors = {
+        # Clockwise transitions
+        'clockwise_near_far': {
+            'point': (255, 50, 50),      # Bright red for clockwise near-to-far
+            'line': (255, 100, 100, 180), # Light red for lines
+            'middle': (200, 40, 40)       # Darker red for middle circle
+        },
+        'clockwise_far_near': {
+            'point': (255, 150, 50),     # Orange-red for clockwise far-to-near  
+            'line': (255, 180, 100, 180), # Light orange-red for lines
+            'middle': (200, 120, 40)      # Darker orange-red for middle circle
+        },
+        # Counterclockwise transitions
+        'counterclockwise_near_far': {
+            'point': (50, 255, 50),      # Bright green for counterclockwise near-to-far
+            'line': (100, 255, 100, 180), # Light green for lines
+            'middle': (40, 200, 40)       # Darker green for middle circle
+        },
+        'counterclockwise_far_near': {
+            'point': (50, 255, 150),     # Blue-green for counterclockwise far-to-near
+            'line': (100, 255, 180, 180), # Light blue-green for lines
+            'middle': (40, 200, 120)      # Darker blue-green for middle circle
+        },
+        # Fallback colors
+        'unknown_near_far': {
+            'point': (255, 255, 0),      # Yellow fallback
+            'line': (255, 255, 100, 180), # Light yellow for lines
+            'middle': (200, 200, 0)       # Darker yellow for middle circle
+        },
+        'unknown_far_near': {
+            'point': (255, 200, 0),      # Orange-yellow fallback
+            'line': (255, 220, 100, 180), # Light orange-yellow for lines
+            'middle': (200, 160, 0)       # Darker orange-yellow for middle circle
+        }
+    }
+    
+    # Detect visibility breakoff points using the API from risk_calculator with orientation
+    breakoff_points, breakoff_lines = detect_visibility_breakoff_points(
+        visibility_data, 
+        min_gap_distance=30,
+        agent_x=agent_x,
+        agent_y=agent_y, 
+        agent_theta=agent_theta
+    )
     
     # Draw visibility polygon
     if show_visibility_area and len(visibility_data) > 2:
@@ -146,6 +155,58 @@ def draw_evader_visibility(screen, agent_x, agent_y, visibility_data, show_rays=
             # Blit to main screen
             screen.blit(line_surface, (min(int(agent_x), int(endpoint[0])), 
                                      min(int(agent_y), int(endpoint[1]))))
+    
+    # Draw breakoff/gap lines connecting points where visibility changes abruptly with category-based coloring
+    for line_data in breakoff_lines:
+        if len(line_data) == 4:  # New format with category
+            start_point, end_point, gap_size, category = line_data
+            # Choose color based on category
+            if category in category_colors:
+                line_color = category_colors[category]['line']
+            else:
+                line_color = breakoff_line_color  # Fallback to default orange
+        else:  # Old format without category (fallback compatibility)
+            start_point, end_point, gap_size = line_data[:3]
+            line_color = breakoff_line_color
+        
+        # Create surface for transparent gap line
+        line_width = min(int(gap_size / 10), 5) + 2  # Thicker lines for larger gaps
+        gap_surface = pygame.Surface((abs(int(end_point[0] - start_point[0])) + line_width * 2, 
+                                     abs(int(end_point[1] - start_point[1])) + line_width * 2), pygame.SRCALPHA)
+        
+        # Calculate line position on surface
+        start_pos = (max(line_width, int(start_point[0] - min(start_point[0], end_point[0]))), 
+                    max(line_width, int(start_point[1] - min(start_point[1], end_point[1]))))
+        end_pos = (max(line_width, int(end_point[0] - min(start_point[0], end_point[0]))), 
+                  max(line_width, int(end_point[1] - min(start_point[1], end_point[1]))))
+        
+        # Draw gap line with category-based color
+        pygame.draw.line(gap_surface, line_color, start_pos, end_pos, line_width)
+        
+        # Blit to main screen
+        screen.blit(gap_surface, (min(int(start_point[0]), int(end_point[0])) - line_width, 
+                                 min(int(start_point[1]), int(end_point[1])) - line_width))
+    
+    # Draw breakoff points as highlighted circles with category-based coloring
+    for point_data in breakoff_points:
+        if len(point_data) == 3:  # New format with category
+            x, y, category = point_data
+            # Choose colors based on category
+            if category in category_colors:
+                outer_color = category_colors[category]['point']
+                middle_color = category_colors[category]['middle']
+            else:
+                outer_color = (255, 255, 0)   # Yellow fallback
+                middle_color = (255, 165, 0)  # Orange fallback
+        else:  # Old format without category (fallback compatibility)
+            x, y = point_data[:2]
+            outer_color = (255, 255, 0)   # Yellow
+            middle_color = (255, 165, 0)  # Orange
+        
+        # Draw a small circle at each breakoff point with category-based coloring
+        pygame.draw.circle(screen, outer_color, (int(x), int(y)), 6)      # Colored outer
+        pygame.draw.circle(screen, middle_color, (int(x), int(y)), 4)     # Darker middle
+        pygame.draw.circle(screen, (255, 255, 255), (int(x), int(y)), 2) # White center
 
 def draw_reachability_grid_overlay(screen, mask_data, agent_x, agent_y, agent_theta, alpha=128):
     """Draw the reachability grid overlay around the agent (optimized for performance)."""
@@ -560,9 +621,6 @@ def main():
     print("  P: Strategic pursuit-evasion analysis (Agent 1 pursues Agent 2)")
     print("  M: Toggle reachability grid overlay for evader (Agent 2)")
     print("  V: Toggle evader visibility system (360° rays)")
-    print("  B: Toggle visibility rays display (when visibility is on)")
-    print("  N: Toggle visibility area display (when visibility is on)")
-    print("  +/-: Increase/decrease visibility range (when visibility is on)")
     print("  I: Toggle info display")
     print("  S: Save agent states")
     print("  Mouse Click: Select RRT node (auto-generates trajectory)")
@@ -579,12 +637,15 @@ def main():
         print("")
     print("Evader Visibility System:")
     print("  V: Show/hide Agent 2's 360° visibility rays")
-    print("  B: Toggle individual rays display (red=blocked, cyan=clear)")
-    print("  N: Toggle visibility area polygon display")
-    print("  +/-: Increase/decrease visibility range (50-500 pixels)")
     print(f"  Current range: {visibility_range:.0f} pixels")
+    print("  Using 100 rays (3.6° increments) for optimal accuracy/performance")
     print("  Rays blocked by walls, pass through doors")
-    print("  Updates in real-time as Agent 2 moves")
+    print("  Breakoff Point Categories (relative to Agent 2's orientation):")
+    print("    Red circles/lines = clockwise near-to-far transitions")
+    print("    Orange-red circles/lines = clockwise far-to-near transitions")
+    print("    Green circles/lines = counterclockwise near-to-far transitions")
+    print("    Blue-green circles/lines = counterclockwise far-to-near transitions")
+    print("  Updates in real-time as Agent 2 moves and rotates")
     print("")
     print("Node Visualization:")
     print(f"  Distance threshold: {DISTANCE_THRESHOLD:.1f}px (nodes closer = more transparent)")
@@ -629,32 +690,6 @@ def main():
                         print("✅ Cyan rays = clear line of sight")
                         print("🔄 Use WASD to move Agent 2 and see visibility change")
                         print(f"📏 Visibility range: {visibility_range:.0f} pixels")
-                elif event.key == pygame.K_b:
-                    if show_evader_visibility:
-                        show_visibility_rays = not show_visibility_rays
-                        print(f"📡 Visibility rays display: {'ON' if show_visibility_rays else 'OFF'}")
-                    else:
-                        print("❌ Enable visibility system first (press V)")
-                elif event.key == pygame.K_n:
-                    if show_evader_visibility:
-                        show_visibility_area = not show_visibility_area
-                        print(f"🌐 Visibility area display: {'ON' if show_visibility_area else 'OFF'}")
-                    else:
-                        print("❌ Enable visibility system first (press V)")
-                elif event.key == pygame.K_EQUALS or event.key == pygame.K_PLUS:
-                    # Increase visibility range
-                    if show_evader_visibility:
-                        visibility_range = min(visibility_range + 25, 500)
-                        print(f"📏 Visibility range increased to {visibility_range:.0f} pixels")
-                    else:
-                        print("❌ Enable visibility system first (press V)")
-                elif event.key == pygame.K_MINUS:
-                    # Decrease visibility range
-                    if show_evader_visibility:
-                        visibility_range = max(visibility_range - 25, 50)
-                        print(f"📏 Visibility range decreased to {visibility_range:.0f} pixels")
-                    else:
-                        print("❌ Enable visibility system first (press V)")
                 elif event.key == pygame.K_t:
                     # Clear cached worst nodes since trees will change
                     global cached_worst_nodes
@@ -883,7 +918,7 @@ def main():
                 visibility_range, 
                 environment.get_all_walls(), 
                 environment.get_doors(),
-                num_rays=72  # 5-degree increments for good balance of accuracy vs performance
+                num_rays=100  # 5-degree increments for good balance of accuracy vs performance
             )
             last_visibility_update = current_time
         
@@ -946,7 +981,8 @@ def main():
                 agent2.state[0], agent2.state[1], 
                 visibility_data,
                 show_rays=show_visibility_rays,
-                show_visibility_area=show_visibility_area
+                show_visibility_area=show_visibility_area,
+                agent_theta=agent2.state[2]  # Pass agent's orientation for breakoff point coloring
             )
         
         # Draw map graph if enabled and loaded
@@ -1146,8 +1182,7 @@ def main():
                 "R: Toggle RRT* trees display",
                 "M: Toggle reachability grid overlay (Agent 2)",
                 "V: Toggle evader visibility (Agent 2 360° rays)",
-                "B: Toggle visibility rays | N: Toggle visibility area",
-                "+/-: Adjust visibility range | T: Regenerate RRT*",
+                "T: Regenerate RRT* trees + auto-map to graph",
                 "U: Force update travel times + auto-map to graph",
                 "P: Strategic analysis (Agent 1 pursues Agent 2)",
                 "I: Toggle this info display",
@@ -1179,17 +1214,48 @@ def main():
             
             # Add visibility system details if active
             if show_evader_visibility:
-                blocked_rays = sum(1 for _, _, _, blocked in visibility_data if blocked) if visibility_data else 0
-                total_rays = len(visibility_data) if visibility_data else 0
-                clear_rays = total_rays - blocked_rays
+                visibility_stats = get_visibility_statistics(visibility_data)
+                
+                # Get breakoff point statistics
+                breakoff_points, breakoff_lines = detect_visibility_breakoff_points(
+                    visibility_data, 
+                    min_gap_distance=30,
+                    agent_x=agent2.state[0],
+                    agent_y=agent2.state[1], 
+                    agent_theta=agent2.state[2]
+                )
+                
+                # Count breakoff points by category
+                category_counts = {
+                    'clockwise_near_far': 0,
+                    'clockwise_far_near': 0,
+                    'counterclockwise_near_far': 0,
+                    'counterclockwise_far_near': 0,
+                    'unknown': 0
+                }
+                
+                for point in breakoff_points:
+                    if len(point) >= 3:
+                        category = point[2]
+                        if category in category_counts:
+                            category_counts[category] += 1
+                        else:
+                            category_counts['unknown'] += 1
                 
                 info_lines.extend([
                     "",
                     "Visibility System:",
-                    f"Total rays: {total_rays}",
-                    f"Clear rays: {clear_rays}",
-                    f"Blocked rays: {blocked_rays}",
-                    f"Visibility %: {(clear_rays/total_rays*100):.1f}%" if total_rays > 0 else "Visibility %: 0.0%",
+                    f"Total rays: {visibility_stats['total_rays']}",
+                    f"Clear rays: {visibility_stats['clear_rays']}",
+                    f"Blocked rays: {visibility_stats['blocked_rays']}",
+                    f"Visibility %: {visibility_stats['visibility_percentage']:.1f}%",
+                    f"Avg distance: {visibility_stats['average_visibility_distance']:.1f}px",
+                    f"Max distance: {visibility_stats['max_visibility_distance']:.1f}px",
+                    f"Breakoff points: {len(breakoff_points)} total",
+                    f"  Clockwise near→far (red): {category_counts['clockwise_near_far']}",
+                    f"  Clockwise far→near (orange-red): {category_counts['clockwise_far_near']}",
+                    f"  Counter near→far (green): {category_counts['counterclockwise_near_far']}",
+                    f"  Counter far→near (blue-green): {category_counts['counterclockwise_far_near']}",
                     f"Show rays: {'ON' if show_visibility_rays else 'OFF'}",
                     f"Show area: {'ON' if show_visibility_area else 'OFF'}",
                     f"Update rate: {1/visibility_update_interval:.1f} Hz",

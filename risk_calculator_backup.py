@@ -7,7 +7,6 @@ Handles reachability calculations, mask transformations, and visibility calculat
 import pickle
 import numpy as np
 import math
-import time
 
 # Import environment constants for world boundary checking
 try:
@@ -18,60 +17,7 @@ except ImportError:
     ENVIRONMENT_HEIGHT = 720
 
 # Import polygon exploration functionality
-# from polygon_exploration_cpp import calculate_polygon_exploration_paths_cpp as calculate_polygon_exploration_paths
-from polygon_exploration import calculate_polygon_exploration_paths  # Fallback if C++ not available 
-
-
-def generate_rectangular_buffer_and_convert(wall_rect):
-    """
-    Generate a rectangular buffer around a wall using Shapely and convert back to pygame.Rect format.
-    
-    Args:
-        wall_rect: pygame.Rect object representing the original wall
-        
-    Returns:
-        pygame.Rect object representing the buffered wall
-    """
-    try:
-        from shapely.geometry import Polygon
-        from shapely.ops import unary_union
-        import pygame
-        
-        # Convert pygame.Rect to shapely Polygon
-        x, y, width, height = wall_rect.x, wall_rect.y, wall_rect.width, wall_rect.height
-        
-        # Create polygon from rectangle coordinates
-        wall_polygon = Polygon([
-            (x, y),                    # Top-left
-            (x + width, y),            # Top-right
-            (x + width, y + height),   # Bottom-right
-            (x, y + height)            # Bottom-left
-        ])
-        
-        # Apply buffer (you can adjust the buffer distance as needed)
-        buffer_distance = 2.0  # Buffer distance in pixels
-        buffered_polygon = wall_polygon.buffer(buffer_distance, join_style=2)  # join_style=2 for mitered joins
-        
-        # Convert back to pygame.Rect
-        # Get bounding box of buffered polygon
-        minx, miny, maxx, maxy = buffered_polygon.bounds
-        
-        # Create new pygame.Rect from bounding box
-        buffered_rect = pygame.Rect(
-            int(minx), 
-            int(miny), 
-            int(maxx - minx), 
-            int(maxy - miny)
-        )
-        
-        return buffered_rect
-        
-    except ImportError:
-        print("Warning: Shapely not available, using original wall without buffering")
-        return wall_rect
-    except Exception as e:
-        print(f"Warning: Error applying shapely buffer: {e}, using original wall")
-        return wall_rect
+from polygon_exploration import calculate_polygon_exploration_paths
 
 # Global cache for reusable arrays to avoid allocation overhead
 _ARRAY_CACHE = {}
@@ -427,7 +373,6 @@ class EvaderAnalysis:
         self.exploration_offset_points = None  # Offset points toward unexplored areas
         self.exploration_nearest_nodes = None  # Nearest map graph nodes to exploration points
         self.polygon_exploration_paths = None  # Polygon exploration paths for breakpoints
-        self.exploration_graph = None  # Intersection graph from polygon exploration
         
         # Environment clipping data for performance optimization
         self.clipped_walls = None  # Walls within visibility range
@@ -435,10 +380,6 @@ class EvaderAnalysis:
         self.visibility_bounding_box = None  # (min_x, min_y, max_x, max_y)
         self.clipping_statistics = None  # Stats about clipping efficiency
         self.visibility_circle = None  # Visibility circle as simple circle parameters
-        self.visibility_boundary_polygon = None  # Polygon connecting all visibility ray endpoints
-        
-        # Projected heatmap data for map graph nodes
-        self.projected_heatmap_nodes = None  # List of (node_index, position, reachability_value) tuples
         
         # Future extensibility - easily add new analysis types
         self.rods = None  # For future rod analysis
@@ -453,21 +394,21 @@ class EvaderAnalysis:
         self.analysis_timestamp = None
         self.spatial_index = None  # Spatial index for fast spatial queries
 
-def clip_environment_to_visibility_range(agent_x, agent_y, visibility_range, walls, doors=None):
+def clip_environment_to_visibility_range(agent_x, agent_y, visibility_range, walls, doors):
     """
-    Clip walls to only include those within or intersecting the visibility circle.
+    Clip walls and doors to only include those within or intersecting the visibility circle.
     This significantly improves performance by reducing the number of collision checks.
     
     Args:
         agent_x, agent_y: Evader position (center of visibility circle)
         visibility_range: Visibility radius
         walls: List of wall rectangles
-        doors: Unused parameter, kept for compatibility
+        doors: List of door rectangles
         
     Returns:
         Tuple of (clipped_walls, clipped_doors, bounding_box, clipping_stats)
         - clipped_walls: Walls within/intersecting visibility circle
-        - clipped_doors: Empty list (doors no longer processed)
+        - clipped_doors: Doors within/intersecting visibility circle  
         - bounding_box: (min_x, min_y, max_x, max_y) of visibility circle
         - clipping_stats: Dictionary with clipping efficiency statistics
     """
@@ -500,21 +441,22 @@ def clip_environment_to_visibility_range(agent_x, agent_y, visibility_range, wal
     clipped_walls = []
     for wall in walls:
         if rectangle_intersects_circle(wall, agent_x, agent_y, visibility_range):
-            # Process wall through shapely buffer before adding
-            buffered_wall = generate_rectangular_buffer_and_convert(wall)
-            clipped_walls.append(buffered_wall)
+            clipped_walls.append(wall)
     
-    # No longer process doors - return empty list for compatibility
+    # Clip doors to visibility range
     clipped_doors = []
+    for door in doors:
+        if rectangle_intersects_circle(door, agent_x, agent_y, visibility_range):
+            clipped_doors.append(door)
     
     # Calculate clipping statistics
     original_wall_count = len(walls)
-    original_door_count = 0  # No doors processed
+    original_door_count = len(doors)
     clipped_wall_count = len(clipped_walls)
-    clipped_door_count = 0   # No doors processed
+    clipped_door_count = len(clipped_doors)
     
     wall_reduction_percent = ((original_wall_count - clipped_wall_count) / original_wall_count * 100) if original_wall_count > 0 else 0
-    door_reduction_percent = 0  # No doors processed
+    door_reduction_percent = ((original_door_count - clipped_door_count) / original_door_count * 100) if original_door_count > 0 else 0
     
     clipping_stats = {
         'original_walls': original_wall_count,
@@ -532,384 +474,6 @@ def clip_environment_to_visibility_range(agent_x, agent_y, visibility_range, wal
     }
     
     return clipped_walls, clipped_doors, bounding_box, clipping_stats
-
-def vectorized_point_in_polygon(x, y, polygon_points):
-    """
-    Vectorized point-in-polygon test using ray casting algorithm.
-    
-    Args:
-        x, y: numpy arrays of point coordinates to test
-        polygon_points: List of (x, y) tuples defining the polygon vertices
-        
-    Returns:
-        numpy boolean array indicating which points are inside the polygon
-    """
-    if len(polygon_points) < 3:
-        return np.zeros(len(x), dtype=bool)
-    
-    try:
-        # Convert polygon to numpy array
-        poly = np.array(polygon_points, dtype=np.float32)
-        n_vertices = len(poly)
-        
-        # Ensure polygon is closed
-        if not np.allclose(poly[0], poly[-1]):
-            poly = np.vstack([poly, poly[0]])
-            n_vertices += 1
-        
-        # Initialize result array
-        inside = np.zeros(len(x), dtype=bool)
-        
-        # Ray casting algorithm - vectorized
-        for i in range(n_vertices - 1):
-            x1, y1 = poly[i]
-            x2, y2 = poly[i + 1]
-            
-            # Check if ray crosses edge
-            cond1 = (y1 > y) != (y2 > y)
-            
-            # Calculate intersection x-coordinate
-            # Only compute where cond1 is True to avoid division by zero
-            where_cond1 = np.where(cond1)
-            if len(where_cond1[0]) > 0:
-                y_subset = y[where_cond1]
-                x_subset = x[where_cond1]
-                
-                # Avoid division by zero
-                y_diff = y2 - y1
-                if abs(y_diff) > 1e-10:  # Not horizontal line
-                    x_intersect = x1 + (y_subset - y1) * (x2 - x1) / y_diff
-                    cond2 = x_subset < x_intersect
-                    inside[where_cond1] ^= cond2  # XOR to toggle
-        
-        return inside
-        
-    except Exception as e:
-        print(f"Warning: Error in vectorized point-in-polygon test: {e}")
-        # Fallback: return all True (no polygon constraint)
-        return np.ones(len(x), dtype=bool)
-
-def calculate_projected_heatmap_at_nodes_optimized_bounding_box(agent_x, agent_y, agent_theta, visibility_range, mask_data, spatial_index, visibility_polygon=None):
-    """
-    Ultra-optimized version using spatial bounding box queries and vectorized operations.
-    Optionally uses visibility polygon rasterization to constrain calculation area.
-    
-    This approach:
-    1. Uses spatial index to query only nodes within bounding box
-    2. Pre-allocates numpy arrays for the bounding region
-    3. Uses vectorized operations throughout
-    4. Minimizes memory allocations
-    5. Optionally constrains to visibility polygon area using rasterization
-    
-    Args:
-        agent_x, agent_y: Agent position
-        agent_theta: Agent orientation in radians
-        visibility_range: Visibility range for filtering nodes
-        mask_data: Reachability mask data
-        spatial_index: Spatial index to get map graph nodes
-        visibility_polygon: Optional list of (x, y) points defining visibility boundary
-        
-    Returns:
-        List of (node_index, (x, y), reachability_value) tuples for nodes within visibility range
-    """
-    if mask_data is None or spatial_index is None:
-        return []
-    
-    try:
-        # Define bounding box for visibility circle in world coordinates
-        bbox_min_x = agent_x - visibility_range
-        bbox_max_x = agent_x + visibility_range
-        bbox_min_y = agent_y - visibility_range
-        bbox_max_y = agent_y + visibility_range
-        
-        # If visibility polygon is provided, use its bounding box instead
-        if visibility_polygon and len(visibility_polygon) >= 3:
-            try:
-                polygon_array = np.array(visibility_polygon, dtype=np.float32)
-                bbox_min_x = max(bbox_min_x, np.min(polygon_array[:, 0]))
-                bbox_max_x = min(bbox_max_x, np.max(polygon_array[:, 0]))
-                bbox_min_y = max(bbox_min_y, np.min(polygon_array[:, 1]))
-                bbox_max_y = min(bbox_max_y, np.max(polygon_array[:, 1]))
-            except Exception as e:
-                print(f"Warning: Could not use visibility polygon bounding box: {e}")
-                visibility_polygon = None  # Fall back to circular constraint
-        
-        # Convert world coordinates to grid indices for spatial query
-        if hasattr(spatial_index, 'grid_to_node') and spatial_index.grid_to_node is not None:
-            # Calculate grid indices from world coordinates (reverse of map graph coordinate calculation)
-            cell_width = getattr(spatial_index, 'cell_width', 1.0)
-            cell_height = getattr(spatial_index, 'cell_height', 1.0)
-            
-            min_i = max(0, int((bbox_min_x / cell_width) - 0.5) - 1)  # Add small margin
-            max_i = min(spatial_index.grid_width - 1, int((bbox_max_x / cell_width) - 0.5) + 1)
-            min_j = max(0, int((bbox_min_y / cell_height) - 0.5) - 1)
-            max_j = min(spatial_index.grid_height - 1, int((bbox_max_y / cell_height) - 0.5) + 1)
-            
-            # Get candidate node indices using spatial index
-            candidate_node_indices = spatial_index.get_nodes_in_grid_region(min_i, min_j, max_i, max_j)
-            
-            if not candidate_node_indices:
-                return []
-            
-            # Get candidate node positions
-            map_graph = spatial_index.map_graph
-            candidate_nodes = [(idx, map_graph.nodes[idx]) for idx in candidate_node_indices]
-        else:
-            # Fallback to all nodes if spatial index not available
-            map_graph = spatial_index.map_graph
-            if not hasattr(map_graph, 'nodes') or not map_graph.nodes:
-                return []
-            candidate_nodes = [(i, pos) for i, pos in enumerate(map_graph.nodes)]
-        
-        if not candidate_nodes:
-            return []
-        
-        # Convert to numpy arrays for vectorized operations
-        node_indices = np.array([node_idx for node_idx, _ in candidate_nodes], dtype=np.int32)
-        nodes_array = np.array([pos for _, pos in candidate_nodes], dtype=np.float32)
-        
-        # Vectorized distance filtering (circular constraint within bounding box)
-        node_x = nodes_array[:, 0]
-        node_y = nodes_array[:, 1]
-        distances_sq = (node_x - agent_x)**2 + (node_y - agent_y)**2
-        visibility_mask = distances_sq <= (visibility_range**2)
-        
-        # If visibility polygon is provided, add polygon containment constraint
-        if visibility_polygon and len(visibility_polygon) >= 3:
-            try:
-                # Use vectorized point-in-polygon test for efficiency
-                polygon_mask = vectorized_point_in_polygon(node_x, node_y, visibility_polygon)
-                # Combine circular and polygon constraints
-                visibility_mask = visibility_mask & polygon_mask
-            except Exception as e:
-                print(f"Warning: Could not apply polygon constraint: {e}")
-                # Fall back to just circular constraint
-        
-        # Apply visibility filter
-        visible_indices = node_indices[visibility_mask]
-        visible_x = node_x[visibility_mask]
-        visible_y = node_y[visibility_mask]
-        
-        if len(visible_indices) == 0:
-            return []
-        
-        # Get the rotated reachability grid (this is still needed for the heatmap values)
-        rotated_grid = get_reachability_probabilities_for_fixed_grid(agent_x, agent_y, -agent_theta, mask_data)
-        
-        # Vectorized coordinate transformation
-        cell_size = mask_data['cell_size_px']
-        grid_size = mask_data['grid_size']
-        center_idx = grid_size // 2
-        
-        relative_x = visible_x - agent_x
-        relative_y = visible_y - agent_y
-        
-        grid_col = np.round(relative_x / cell_size + center_idx).astype(np.int32)
-        grid_row = np.round(center_idx - relative_y / cell_size).astype(np.int32)
-        
-        # Vectorized bounds checking
-        valid_mask = ((grid_row >= 0) & (grid_row < grid_size) & 
-                     (grid_col >= 0) & (grid_col < grid_size))
-        
-        # Apply bounds filter
-        final_indices = visible_indices[valid_mask]
-        final_x = visible_x[valid_mask]
-        final_y = visible_y[valid_mask]
-        final_rows = grid_row[valid_mask]
-        final_cols = grid_col[valid_mask]
-        
-        if len(final_indices) == 0:
-            return []
-        
-        # Vectorized heatmap value extraction
-        reachability_values = rotated_grid[final_rows, final_cols]
-        
-        # Filter out only exact zeros, preserve all non-zero values no matter how small
-        # Use a very small epsilon to handle floating-point precision issues
-        epsilon = np.finfo(reachability_values.dtype).eps * 10  # 10x machine epsilon
-        non_zero_mask = reachability_values > epsilon
-        
-        # Optional debug: Print statistics about filtered values (can be disabled for performance)
-        debug_filtering = False  # Set to True for debugging
-        if debug_filtering:
-            total_values = len(reachability_values)
-            zero_count = np.sum(reachability_values == 0.0)
-            very_small_count = np.sum((reachability_values > 0.0) & (reachability_values <= epsilon))
-            preserved_count = np.sum(non_zero_mask)
-            
-            if total_values > 0:
-                print(f"Heatmap filtering (optimized): {total_values} total values, {zero_count} exact zeros, "
-                      f"{very_small_count} very small (≤{epsilon:.2e}), {preserved_count} preserved")
-                if preserved_count > 0:
-                    min_preserved = np.min(reachability_values[non_zero_mask])
-                    max_preserved = np.max(reachability_values[non_zero_mask])
-                    print(f"  Value range: {min_preserved:.2e} to {max_preserved:.2e}")
-        
-        # Build final result
-        projected_nodes = []
-        if np.any(non_zero_mask):
-            result_indices = final_indices[non_zero_mask]
-            result_x = final_x[non_zero_mask]
-            result_y = final_y[non_zero_mask]
-            result_values = reachability_values[non_zero_mask]
-            
-            # Convert to expected format
-            for idx, x, y, val in zip(result_indices, result_x, result_y, result_values):
-                projected_nodes.append((int(idx), (float(x), float(y)), float(val)))
-        
-        return projected_nodes
-        
-    except Exception as e:
-        print(f"Error in optimized projected heatmap calculation: {e}")
-        # Fallback to the regular optimized version
-        return calculate_projected_heatmap_at_nodes(agent_x, agent_y, agent_theta, visibility_range, mask_data, spatial_index)
-
-
-def calculate_projected_heatmap_at_nodes(agent_x, agent_y, agent_theta, visibility_range, mask_data, spatial_index):
-    """
-    Calculate projected reachability heatmap values at map graph nodes within visibility range.
-    Optimized version using vectorized numpy operations for better performance.
-    
-    Args:
-        agent_x, agent_y: Agent position
-        agent_theta: Agent orientation in radians
-        visibility_range: Visibility range for filtering nodes
-        mask_data: Reachability mask data
-        spatial_index: Spatial index to get map graph nodes
-        
-    Returns:
-        List of (node_index, (x, y), reachability_value) tuples for nodes within visibility range
-    """
-    if mask_data is None or spatial_index is None:
-        return []
-    
-    try:
-        # Get all map graph nodes from spatial index
-        map_graph = spatial_index.map_graph
-        if not hasattr(map_graph, 'nodes') or not map_graph.nodes:
-            return []
-        
-        # Convert nodes to numpy arrays for vectorized operations
-        nodes_array = np.array(map_graph.nodes, dtype=np.float32)  # Shape: (N, 2)
-        node_x = nodes_array[:, 0]
-        node_y = nodes_array[:, 1]
-        
-        # Vectorized distance calculation to filter nodes within visibility range
-        distances_sq = (node_x - agent_x)**2 + (node_y - agent_y)**2
-        visible_mask = distances_sq <= (visibility_range**2)
-        
-        # Early exit if no nodes are visible
-        visible_indices = np.where(visible_mask)[0]
-        if len(visible_indices) == 0:
-            return []
-        
-        # Get visible nodes coordinates
-        visible_nodes_x = node_x[visible_mask]
-        visible_nodes_y = node_y[visible_mask]
-        
-        # Calculate relative positions from agent (vectorized)
-        relative_x = visible_nodes_x - agent_x
-        relative_y = visible_nodes_y - agent_y
-        
-        # Get the rotated reachability grid centered on the agent
-        # Use -agent_theta to match the coordinate system used by the M key overlay
-        rotated_grid = get_reachability_probabilities_for_fixed_grid(agent_x, agent_y, -agent_theta, mask_data)
-        
-        # Convert relative world coordinates to grid indices (vectorized)
-        cell_size = mask_data['cell_size_px']
-        grid_size = mask_data['grid_size']
-        center_idx = grid_size // 2
-        
-        # Vectorized coordinate transformation
-        grid_col = np.round(relative_x / cell_size + center_idx).astype(np.int32)
-        grid_row = np.round(center_idx - relative_y / cell_size).astype(np.int32)
-        
-        # Vectorized bounds checking
-        valid_grid_mask = ((grid_row >= 0) & (grid_row < grid_size) & 
-                          (grid_col >= 0) & (grid_col < grid_size))
-        
-        # Apply bounds mask to get final valid indices
-        final_valid_mask = valid_grid_mask
-        final_indices = visible_indices[final_valid_mask]
-        final_grid_rows = grid_row[final_valid_mask]
-        final_grid_cols = grid_col[final_valid_mask]
-        
-        # Extract reachability values using advanced indexing (vectorized)
-        reachability_values = rotated_grid[final_grid_rows, final_grid_cols]
-        
-        # Filter out only exact zeros, preserve all non-zero values no matter how small
-        # Use a very small epsilon to handle floating-point precision issues
-        epsilon = np.finfo(reachability_values.dtype).eps * 10  # 10x machine epsilon
-        non_zero_mask = reachability_values > epsilon
-        
-        # Optional debug: Print statistics about filtered values (can be disabled for performance)
-        debug_filtering = False  # Set to True for debugging
-        if debug_filtering:
-            total_values = len(reachability_values)
-            zero_count = np.sum(reachability_values == 0.0)
-            very_small_count = np.sum((reachability_values > 0.0) & (reachability_values <= epsilon))
-            preserved_count = np.sum(non_zero_mask)
-            
-            if total_values > 0:
-                print(f"Heatmap filtering: {total_values} total values, {zero_count} exact zeros, "
-                      f"{very_small_count} very small (≤{epsilon:.2e}), {preserved_count} preserved")
-                if preserved_count > 0:
-                    min_preserved = np.min(reachability_values[non_zero_mask])
-                    max_preserved = np.max(reachability_values[non_zero_mask])
-                    print(f"  Value range: {min_preserved:.2e} to {max_preserved:.2e}")
-        
-        # Build final result list
-        projected_nodes = []
-        if np.any(non_zero_mask):
-            final_node_indices = final_indices[non_zero_mask]
-            final_reachability = reachability_values[non_zero_mask]
-            
-            # Convert back to the expected format
-            for i, (node_idx, reachability_val) in enumerate(zip(final_node_indices, final_reachability)):
-                node_pos = map_graph.nodes[node_idx]
-                projected_nodes.append((int(node_idx), node_pos, float(reachability_val)))
-        
-        return projected_nodes
-        
-    except Exception as e:
-        print(f"Error calculating projected heatmap at nodes: {e}")
-        return []
-    
-    return projected_nodes
-
-def create_visibility_boundary_polygon(visibility_rays, agent_x, agent_y):
-    """
-    Create a polygon by connecting all the endpoints of visibility rays in order.
-    
-    Args:
-        visibility_rays: List of (angle, endpoint, distance, blocked) tuples
-        agent_x, agent_y: Agent position (not used in polygon, but kept for consistency)
-        
-    Returns:
-        List of (x, y) coordinates forming the visibility boundary polygon
-    """
-    if not visibility_rays or len(visibility_rays) < 3:
-        return []
-    
-    # Sort rays by angle to ensure proper polygon ordering
-    sorted_rays = sorted(visibility_rays, key=lambda ray: ray[0])
-    
-    # Extract endpoints to form the polygon
-    polygon_points = []
-    for angle, endpoint, distance, blocked in sorted_rays:
-        # Ensure endpoint is valid
-        if endpoint and len(endpoint) >= 2:
-            polygon_points.append((float(endpoint[0]), float(endpoint[1])))
-    
-    # Only return polygon if we have at least 3 points
-    if len(polygon_points) < 3:
-        return []
-    
-    # Note: We don't explicitly close the polygon here since pygame.draw.polygon 
-    # automatically connects the last point to the first point
-    
-    return polygon_points
-
 
 def calculate_evader_analysis(agent_x, agent_y, agent_theta, visibility_range, walls, 
                             mask_data=None, num_rays=100, num_sectors=8, min_gap_distance=30, spatial_index=None, save_lines_to_file=None):
@@ -960,19 +524,6 @@ def calculate_evader_analysis(agent_x, agent_y, agent_theta, visibility_range, w
         agent_x, agent_y, visibility_range, analysis.clipped_walls, [], num_rays
     )
     
-    # Create visibility boundary polygon from ray endpoints
-    analysis.visibility_boundary_polygon = create_visibility_boundary_polygon(
-        analysis.visibility_rays, agent_x, agent_y
-    )
-    
-    # Calculate projected heatmap values at map graph nodes within visibility range
-    # Use optimized bounding box version with polygon constraint for better performance
-    if mask_data is not None:
-        analysis.projected_heatmap_nodes = calculate_projected_heatmap_at_nodes_optimized_bounding_box(
-            agent_x, agent_y, agent_theta, visibility_range, mask_data, spatial_index, 
-            visibility_polygon=analysis.visibility_boundary_polygon
-        )
-    
     # Calculate visibility statistics
     analysis.visibility_statistics = get_visibility_statistics(analysis.visibility_rays)
     
@@ -1007,24 +558,6 @@ def calculate_evader_analysis(agent_x, agent_y, agent_theta, visibility_range, w
                     'direction': exploration_point[4]
                 })
     
-    # Convert visibility rays to wall lines and add to clipped environment
-    ray_walls = convert_visibility_rays_to_walls(analysis.visibility_rays, agent_x, agent_y)
-    
-    # Add connecting walls between consecutive ray endpoints (avoiding breakoff line duplicates)
-    ray_connecting_walls = create_ray_connecting_walls(analysis.visibility_rays, analysis.breakoff_lines, agent_x, agent_y)
-    if ray_connecting_walls:
-        ray_walls.extend(ray_connecting_walls)
-    
-    # Store the visibility circle as a simple circle (not DDA wall segments)
-    analysis.visibility_circle = {
-        'center_x': agent_x,
-        'center_y': agent_y,
-        'radius': visibility_range
-    }
-    
-    # Convert breakoff lines to wall lines
-    breakoff_walls = convert_breakoff_lines_to_walls(analysis.breakoff_lines)
-    
     # Convert all environment elements to lines for polygon exploration
     clipped_environment_lines = []
     
@@ -1036,23 +569,23 @@ def calculate_evader_analysis(agent_x, agent_y, agent_theta, visibility_range, w
     if analysis.clipped_doors:
         clipped_environment_lines.extend(convert_rectangles_to_lines(analysis.clipped_doors))
     
-    # Add ray walls to environment lines for polygon exploration
-    if ray_walls:
-        for ray in ray_walls:
-            if isinstance(ray, dict) and 'start' in ray and 'end' in ray:
-                clipped_environment_lines.append((ray['start'], ray['end']))
-    
-    # Add breakoff walls to environment lines for polygon exploration
-    if breakoff_walls:
-        for breakoff in breakoff_walls:
-            if isinstance(breakoff, dict) and 'start' in breakoff and 'end' in breakoff:
-                clipped_environment_lines.append((breakoff['start'], breakoff['end']))
-    
     # Calculate polygon exploration paths for breakpoints into unknown areas
-    # Now includes ray walls and breakoff walls as geometric constraints
-    analysis.polygon_exploration_paths, analysis.exploration_graph = calculate_polygon_exploration_paths(
+    analysis.polygon_exploration_paths = calculate_polygon_exploration_paths(
         analysis.breakoff_lines, agent_x, agent_y, visibility_range, clipped_environment_lines
     )
+    
+    # Convert visibility rays to wall lines and add to clipped environment
+    ray_walls = convert_visibility_rays_to_walls(analysis.visibility_rays, agent_x, agent_y)
+    
+    # Store the visibility circle as a simple circle (not DDA wall segments)
+    analysis.visibility_circle = {
+        'center_x': agent_x,
+        'center_y': agent_y,
+        'radius': visibility_range
+    }
+    
+    # Convert breakoff lines to wall lines
+    breakoff_walls = convert_breakoff_lines_to_walls(analysis.breakoff_lines)
     
     # Add ray walls and breakoff walls to the clipped walls so they're part of the environment data
     all_new_walls = []
@@ -1139,93 +672,6 @@ def convert_visibility_rays_to_walls(visibility_rays, agent_x, agent_y):
         })
     
     return ray_walls
-
-def create_ray_connecting_walls(visibility_rays, breakoff_lines, agent_x, agent_y):
-    """
-    Create walls connecting consecutive ray endpoints that were converted to walls.
-    Avoids duplicating connections that are already covered by breakoff lines.
-    
-    Args:
-        visibility_rays: List of (angle, endpoint, distance, blocked) tuples
-        breakoff_lines: List of (start_point, end_point, gap_size, category) tuples
-        agent_x, agent_y: Agent position
-        
-    Returns:
-        List of line dictionaries for connecting walls between consecutive ray endpoints
-    """
-    connecting_walls = []
-    
-    if not visibility_rays or len(visibility_rays) < 2:
-        return connecting_walls
-    
-    # Get the rays that would be converted to walls (same logic as convert_visibility_rays_to_walls)
-    rays_converted_to_walls = []
-    i = 0
-    while i < len(visibility_rays):
-        angle, endpoint, distance, blocked = visibility_rays[i]
-        
-        if blocked:
-            # Blocked ray - always add it
-            rays_converted_to_walls.append(i)
-            i += 1
-        else:
-            # Start of a potential full-length sequence
-            sequence_start = i
-            
-            # Find the end of consecutive full-length rays
-            while i < len(visibility_rays) and not visibility_rays[i][3]:  # not blocked
-                i += 1
-            sequence_end = i - 1
-            
-            # Add first and last rays of the sequence
-            if sequence_start == sequence_end:
-                # Single full-length ray
-                rays_converted_to_walls.append(sequence_start)
-            else:
-                # Multiple consecutive full-length rays - add first and last
-                rays_converted_to_walls.append(sequence_start)
-                rays_converted_to_walls.append(sequence_end)
-    
-    # Create set of existing breakoff line endpoints for quick lookup
-    breakoff_endpoints = set()
-    for start_point, end_point, gap_size, category in breakoff_lines:
-        breakoff_endpoints.add((round(start_point[0], 2), round(start_point[1], 2)))
-        breakoff_endpoints.add((round(end_point[0], 2), round(end_point[1], 2)))
-    
-    # Connect consecutive rays that were converted to walls
-    for i in range(len(rays_converted_to_walls)):
-        current_ray_idx = rays_converted_to_walls[i]
-        next_ray_idx = rays_converted_to_walls[(i + 1) % len(rays_converted_to_walls)]  # Wrap around
-        
-        current_endpoint = visibility_rays[current_ray_idx][1]  # endpoint field
-        next_endpoint = visibility_rays[next_ray_idx][1]
-        
-        # Round coordinates for comparison
-        current_rounded = (round(current_endpoint[0], 2), round(current_endpoint[1], 2))
-        next_rounded = (round(next_endpoint[0], 2), round(next_endpoint[1], 2))
-        
-        # Check if this connection already exists as a breakoff line
-        connection_exists = (current_rounded in breakoff_endpoints and 
-                           next_rounded in breakoff_endpoints)
-        
-        # Only add connection if it doesn't already exist and endpoints are different
-        if not connection_exists and current_rounded != next_rounded:
-            # Calculate distance to avoid very short connections
-            distance = math.sqrt(
-                (current_endpoint[0] - next_endpoint[0])**2 + 
-                (current_endpoint[1] - next_endpoint[1])**2
-            )
-            
-            # Only add if distance is reasonable (avoid noise from very close points)
-            if distance > 5.0:  # Minimum distance threshold
-                connecting_walls.append({
-                    'start': current_endpoint,
-                    'end': next_endpoint,
-                    'type': 'ray_connecting_line',
-                    'distance': distance
-                })
-    
-    return connecting_walls
 
 def create_visibility_circle_walls(agent_x, agent_y, visibility_range, wall_thickness=2, num_segments=120):
     """
@@ -1497,6 +943,623 @@ def calculate_exploration_offset_points(breakoff_midpoints, breakoff_lines, offs
     
     return exploration_points
 
+def calculate_polygon_exploration_paths(breakoff_lines, agent_x, agent_y, visibility_range, clipped_environment_lines, max_iterations=50):
+    """
+    Calculate polygon exploration paths for breakpoints into unknown areas.
+    Algorithm: Start from outer breakpoint, travel inward until intersecting with line/circle,
+    take left turn (or most acute angle), move along line/arc, repeat until back at start.
+    
+    Args:
+        breakoff_lines: List of (start_point, end_point, gap_size, category) tuples
+        agent_x, agent_y: Agent position (center of visibility circle)
+        visibility_range: Radius of visibility circle
+        clipped_environment_lines: List of line segments from clipped environment
+        max_iterations: Maximum iterations to prevent infinite loops (default 50)
+    
+    Returns:
+        List of polygon exploration paths, one for each breakpoint line.
+        Each path is a dict with:
+        - 'breakoff_line': Original breakoff line data
+        - 'path_points': List of (x, y) points forming the exploration polygon
+        - 'path_segments': List of path segments with type info
+        - 'completed': True if path returned to start, False if terminated early
+    """
+    if not breakoff_lines:
+        return []
+    
+    # For now, just use the first breakoff line as requested
+    if len(breakoff_lines) > 1:
+        breakoff_lines = [breakoff_lines[0]]
+    
+    polygon_paths = []
+    
+    for start_point, end_point, gap_size, category in breakoff_lines:
+        # Pre-calculate ALL circle intersections with environment lines
+        circle_intersections = []
+        for line_segment in clipped_environment_lines:
+            if len(line_segment) != 2:
+                continue
+            line_start, line_end = line_segment
+            
+            # Find all intersection points of this line with the visibility circle
+            intersections = line_circle_intersections(
+                line_start[0], line_start[1], line_end[0], line_end[1],
+                agent_x, agent_y, visibility_range
+            )
+            
+            for intersection_point in intersections:
+                # Calculate angle of intersection point on circle
+                angle = math.atan2(intersection_point[1] - agent_y, intersection_point[0] - agent_x)
+                
+                # Calculate tangent angle at this point for secondary sorting
+                # Tangent is perpendicular to radius
+                tangent_angle = angle + math.pi/2
+                
+                circle_intersections.append({
+                    'point': intersection_point,
+                    'angle': angle,
+                    'tangent_angle': tangent_angle,
+                    'line': line_segment
+                })
+        
+        # Sort by angle (primary) and tangent angle (secondary)
+        circle_intersections.sort(key=lambda x: (x['angle'], x['tangent_angle']))
+        
+        # Start from the outer point (farther from agent)
+        dist_start = math.sqrt((start_point[0] - agent_x)**2 + (start_point[1] - agent_y)**2)
+        dist_end = math.sqrt((end_point[0] - agent_x)**2 + (end_point[1] - agent_y)**2)
+        
+        if dist_start > dist_end:
+            current_point = start_point
+            original_start = start_point
+        else:
+            current_point = end_point
+            original_start = end_point
+        
+        path_points = [current_point]
+        path_segments = []
+        completed = False
+        
+        # Determine turn direction from category
+        turn_clockwise = 'near_far' in category  # near_far = right turn = clockwise
+        
+        # First, travel along the breakoff line itself until intersection
+        # Calculate direction along the breakoff line toward the inner point
+        inner_point = end_point if dist_start > dist_end else start_point
+        line_direction_x = inner_point[0] - current_point[0]
+        line_direction_y = inner_point[1] - current_point[1]
+        line_length = math.sqrt(line_direction_x**2 + line_direction_y**2)
+        
+        if line_length > 0:
+            line_direction_x /= line_length
+            line_direction_y /= line_length
+            
+            # Find intersection along the breakoff line direction
+            breakoff_intersection = find_nearest_intersection(
+                current_point, line_direction_x, line_direction_y,
+                clipped_environment_lines, agent_x, agent_y, visibility_range
+            )
+            
+            if breakoff_intersection:
+                intersection_point, intersection_type, intersection_data = breakoff_intersection
+                
+                # Add intersection point to path
+                path_points.append(intersection_point)
+                path_segments.append({
+                    'start': current_point,
+                    'end': intersection_point,
+                    'type': 'breakoff_line_travel'
+                })
+                
+                # Update current point and calculate new direction (left turn)
+                current_point = intersection_point
+                
+                # Calculate new direction based on breakoff category
+                turn_result = calculate_exploration_turn_direction(
+                    path_points[-2] if len(path_points) >= 2 else current_point, 
+                    intersection_point, line_direction_x, line_direction_y,
+                    intersection_type, intersection_data, clipped_environment_lines,
+                    agent_x, agent_y, visibility_range, breakoff_category=category,
+                    circle_intersections=circle_intersections
+                )
+                
+                if turn_result:
+                    if len(turn_result) == 3:
+                        direction_x, direction_y, arc_info = turn_result
+                    else:
+                        direction_x, direction_y = turn_result
+                else:
+                    # Fallback: perpendicular turn from line direction based on distance transition
+                    if 'near_far' in category:
+                        # Right turn for near-to-far transitions
+                        direction_x = line_direction_y   # 90 degrees clockwise (right)
+                        direction_y = -line_direction_x
+                    else:
+                        # Left turn for far-to-near transitions
+                        direction_x = -line_direction_y  # 90 degrees counterclockwise (left)
+                        direction_y = line_direction_x
+            else:
+                # No intersection along breakoff line, use original inward direction
+                direction_x = agent_x - current_point[0]
+                direction_y = agent_y - current_point[1]
+                direction_length = math.sqrt(direction_x**2 + direction_y**2)
+                if direction_length > 0:
+                    direction_x /= direction_length
+                    direction_y /= direction_length
+        else:
+            # Fallback: direction toward agent (inward)
+            direction_x = agent_x - current_point[0]
+            direction_y = agent_y - current_point[1]
+            direction_length = math.sqrt(direction_x**2 + direction_y**2)
+            if direction_length > 0:
+                direction_x /= direction_length
+                direction_y /= direction_length
+        
+        for iteration in range(max_iterations):
+            # Find intersection with nearest line or circle
+            intersection_info = find_nearest_intersection(
+                current_point, direction_x, direction_y, 
+                clipped_environment_lines, agent_x, agent_y, visibility_range
+            )
+            
+            if not intersection_info:
+                # No intersection found, stop
+                break
+            
+            intersection_point, intersection_type, intersection_data = intersection_info
+            
+            # Record the path segment to the intersection
+            prev_point = current_point
+            
+            # Add intersection point to path
+            path_points.append(intersection_point)
+            
+            # Calculate new direction based on breakoff category
+            turn_result = calculate_exploration_turn_direction(
+                current_point, intersection_point, direction_x, direction_y,
+                intersection_type, intersection_data, clipped_environment_lines,
+                agent_x, agent_y, visibility_range, breakoff_category=category,
+                circle_intersections=circle_intersections
+            )
+            
+            if not turn_result:
+                # Can't determine new direction, stop
+                break
+            
+            # Handle both simple direction and arc information
+            if isinstance(turn_result, tuple) and len(turn_result) == 3:
+                # Arc result with circle information
+                new_dir_x, new_dir_y, arc_info = turn_result
+                
+                # Add arc segment for circle intersections
+                path_segments.append({
+                    'start': prev_point,
+                    'end': intersection_point, 
+                    'type': 'circle_arc',
+                    'circle_center': arc_info['center'],
+                    'circle_radius': arc_info['radius']
+                })
+            else:
+                # Simple direction result
+                new_dir_x, new_dir_y = turn_result
+                
+                # Add regular segment
+                path_segments.append({
+                    'start': prev_point,
+                    'end': intersection_point,
+                    'type': 'ray_to_intersection'
+                })
+            
+            # Move to intersection point and update direction
+            current_point = intersection_point
+            direction_x, direction_y = new_dir_x, new_dir_y
+            
+            # Check if we're back near the original start point
+            dist_to_start = math.sqrt(
+                (current_point[0] - original_start[0])**2 + 
+                (current_point[1] - original_start[1])**2
+            )
+            
+            if dist_to_start < 10.0:  # Close enough to start
+                # Close the polygon
+                path_points.append(original_start)
+                path_segments.append({
+                    'start': current_point,
+                    'end': original_start,
+                    'type': 'closing_segment'
+                })
+                completed = True
+                break
+        
+        polygon_paths.append({
+            'breakoff_line': (start_point, end_point, gap_size, category),
+            'path_points': path_points,
+            'path_segments': path_segments,
+            'completed': completed,
+            'iterations': iteration + 1 if not completed else iteration + 1
+        })
+    
+    return polygon_paths
+
+def find_nearest_intersection(start_point, direction_x, direction_y, environment_lines, agent_x, agent_y, visibility_range):
+    """
+    Find the nearest intersection of a ray with environment lines or visibility circle.
+    
+    Args:
+        start_point: (x, y) starting point of ray
+        direction_x, direction_y: Normalized direction vector
+        environment_lines: List of line segments
+        agent_x, agent_y: Center of visibility circle
+        visibility_range: Radius of visibility circle
+    
+    Returns:
+        Tuple of (intersection_point, intersection_type, intersection_data) or None
+        - intersection_point: (x, y) coordinates
+        - intersection_type: 'line' or 'circle'
+        - intersection_data: Original line segment or circle info
+    """
+    min_distance = float('inf')
+    closest_intersection = None
+    
+    start_x, start_y = start_point
+    
+    # Check intersection with all environment lines
+    for line_segment in environment_lines:
+        if len(line_segment) == 2:  # ((x1, y1), (x2, y2)) format
+            line_start, line_end = line_segment
+        else:
+            continue  # Skip malformed lines
+        
+        intersection = ray_line_intersection(
+            start_x, start_y, direction_x, direction_y,
+            line_start[0], line_start[1], line_end[0], line_end[1]
+        )
+        
+        if intersection:
+            int_x, int_y = intersection
+            distance = math.sqrt((int_x - start_x)**2 + (int_y - start_y)**2)
+            
+            if distance < min_distance and distance > 1e-6:  # Avoid self-intersection
+                min_distance = distance
+                closest_intersection = (intersection, 'line', line_segment)
+    
+    # Check intersection with visibility circle
+    circle_intersection = ray_circle_intersection(
+        start_x, start_y, direction_x, direction_y,
+        agent_x, agent_y, visibility_range
+    )
+    
+    if circle_intersection:
+        int_x, int_y = circle_intersection
+        distance = math.sqrt((int_x - start_x)**2 + (int_y - start_y)**2)
+        
+        if distance < min_distance and distance > 1e-6:
+            min_distance = distance
+            closest_intersection = (circle_intersection, 'circle', 
+                                  {'center': (agent_x, agent_y), 'radius': visibility_range})
+    
+    return closest_intersection
+
+def ray_line_intersection(ray_x, ray_y, ray_dx, ray_dy, line_x1, line_y1, line_x2, line_y2):
+    """
+    Calculate intersection between a ray and a line segment.
+    
+    Args:
+        ray_x, ray_y: Ray starting point
+        ray_dx, ray_dy: Ray direction (normalized)
+        line_x1, line_y1, line_x2, line_y2: Line segment endpoints
+    
+    Returns:
+        (x, y) intersection point or None if no intersection
+    """
+    # Line segment vector
+    line_dx = line_x2 - line_x1
+    line_dy = line_y2 - line_y1
+    
+    # Solve: ray_start + t * ray_dir = line_start + s * line_dir
+    # ray_x + t * ray_dx = line_x1 + s * line_dx
+    # ray_y + t * ray_dy = line_y1 + s * line_dy
+    
+    denominator = ray_dx * line_dy - ray_dy * line_dx
+    
+    if abs(denominator) < 1e-10:  # Parallel lines
+        return None
+    
+    # Calculate parameters
+    dx = line_x1 - ray_x
+    dy = line_y1 - ray_y
+    
+    t = (dx * line_dy - dy * line_dx) / denominator
+    s = (dx * ray_dy - dy * ray_dx) / denominator
+    
+    # Check if intersection is valid
+    if t >= 0 and 0 <= s <= 1:  # Ray forward, within line segment
+        int_x = ray_x + t * ray_dx
+        int_y = ray_y + t * ray_dy
+        return (int_x, int_y)
+    
+    return None
+
+def line_circle_intersections(line_x1, line_y1, line_x2, line_y2, circle_x, circle_y, radius):
+    """
+    Find all intersection points between a line segment and a circle.
+    
+    Args:
+        line_x1, line_y1, line_x2, line_y2: Line segment endpoints
+        circle_x, circle_y: Circle center
+        radius: Circle radius
+    
+    Returns:
+        List of intersection points [(x, y), ...] (can be 0, 1, or 2 points)
+    """
+    # Line direction vector
+    dx = line_x2 - line_x1
+    dy = line_y2 - line_y1
+    
+    # Vector from circle center to line start
+    fx = line_x1 - circle_x
+    fy = line_y1 - circle_y
+    
+    # Quadratic equation coefficients: a*t^2 + b*t + c = 0
+    a = dx*dx + dy*dy
+    b = 2*(fx*dx + fy*dy)
+    c = fx*fx + fy*fy - radius*radius
+    
+    discriminant = b*b - 4*a*c
+    
+    if discriminant < 0:
+        return []  # No intersection
+    
+    intersections = []
+    
+    if discriminant == 0:
+        # One intersection (tangent)
+        t = -b / (2*a)
+        if 0 <= t <= 1:  # Within line segment
+            x = line_x1 + t*dx
+            y = line_y1 + t*dy
+            intersections.append((x, y))
+    else:
+        # Two intersections
+        sqrt_discriminant = math.sqrt(discriminant)
+        t1 = (-b - sqrt_discriminant) / (2*a)
+        t2 = (-b + sqrt_discriminant) / (2*a)
+        
+        if 0 <= t1 <= 1:  # First intersection within line segment
+            x1 = line_x1 + t1*dx
+            y1 = line_y1 + t1*dy
+            intersections.append((x1, y1))
+        
+        if 0 <= t2 <= 1:  # Second intersection within line segment
+            x2 = line_x1 + t2*dx
+            y2 = line_y1 + t2*dy
+            intersections.append((x2, y2))
+    
+    return intersections
+
+def ray_circle_intersection(ray_x, ray_y, ray_dx, ray_dy, circle_x, circle_y, radius):
+    """
+    Calculate intersection between a ray and a circle.
+    
+    Args:
+        ray_x, ray_y: Ray starting point
+        ray_dx, ray_dy: Ray direction (normalized)
+        circle_x, circle_y: Circle center
+        radius: Circle radius
+    
+    Returns:
+        (x, y) nearest intersection point or None if no intersection
+    """
+    # Vector from circle center to ray start
+    to_ray_x = ray_x - circle_x
+    to_ray_y = ray_y - circle_y
+    
+    # Quadratic equation coefficients: a*t^2 + b*t + c = 0
+    a = ray_dx**2 + ray_dy**2  # Should be 1 for normalized direction
+    b = 2 * (to_ray_x * ray_dx + to_ray_y * ray_dy)
+    c = to_ray_x**2 + to_ray_y**2 - radius**2
+    
+    discriminant = b**2 - 4*a*c
+    
+    if discriminant < 0:  # No intersection
+        return None
+    
+    # Two intersection points (or one if tangent)
+    sqrt_discriminant = math.sqrt(discriminant)
+    t1 = (-b - sqrt_discriminant) / (2*a)
+    t2 = (-b + sqrt_discriminant) / (2*a)
+    
+    # Choose the nearest forward intersection
+    if t1 >= 1e-6:  # Forward intersection, not too close
+        t = t1
+    elif t2 >= 1e-6:
+        t = t2
+    else:
+        return None  # No forward intersection
+    
+    int_x = ray_x + t * ray_dx
+    int_y = ray_y + t * ray_dy
+    return (int_x, int_y)
+
+def calculate_exploration_turn_direction(current_point, intersection_point, incoming_dir_x, incoming_dir_y,
+                                       intersection_type, intersection_data, environment_lines,
+                                       agent_x, agent_y, visibility_range, breakoff_category=None, circle_intersections=None):
+    """
+    Calculate the new direction after hitting an intersection.
+    Turn direction depends on distance transition type:
+    - Near-to-far transitions (green and orange-red): turn RIGHT
+    - Far-to-near transitions (red and blue-green): turn LEFT
+    When intersecting a circle, use pre-calculated intersections for binary search.
+    
+    Args:
+        current_point: Previous position
+        intersection_point: Current intersection point
+        incoming_dir_x, incoming_dir_y: Incoming direction
+        intersection_type: 'line' or 'circle'
+        intersection_data: Line segment or circle data
+        environment_lines: All environment lines
+        agent_x, agent_y: Agent position
+        visibility_range: Visibility range
+        breakoff_category: Category of breakoff point (determines turn direction)
+        circle_intersections: Pre-calculated sorted circle intersections
+    
+    Returns:
+        (new_dir_x, new_dir_y) normalized direction or (new_dir_x, new_dir_y, arc_info) for circles
+    """
+    # Determine turn direction based on distance transition type
+    turn_left = True  # Default to left turn
+    if breakoff_category:
+        if 'near_far' in breakoff_category:
+            # Near-to-far transitions turn right
+            turn_left = False
+        elif 'far_near' in breakoff_category:
+            # Far-to-near transitions turn left
+            turn_left = True
+    
+    if intersection_type == 'line':
+        # Move along the intersected line
+        line_segment = intersection_data
+        line_start, line_end = line_segment
+        
+        # Line direction vector
+        line_dx = line_end[0] - line_start[0]
+        line_dy = line_end[1] - line_start[1]
+        line_length = math.sqrt(line_dx**2 + line_dy**2)
+        
+        if line_length == 0:
+            return None
+        
+        # Normalize line direction
+        line_dx /= line_length
+        line_dy /= line_length
+        
+        # Choose direction based on desired turn direction
+        # Cross product of incoming direction with line direction
+        cross_product = incoming_dir_x * line_dy - incoming_dir_y * line_dx
+        
+        if turn_left:
+            # Turn left
+            if cross_product < 0:
+                # Line direction is a left turn
+                return (line_dx, line_dy)
+            else:
+                # Reverse line direction for left turn
+                return (-line_dx, -line_dy)
+        else:
+            # Turn right
+            if cross_product > 0:
+                # Line direction is a right turn
+                return (line_dx, line_dy)
+            else:
+                # Reverse line direction for right turn
+                return (-line_dx, -line_dy)
+    
+    elif intersection_type == 'circle' and circle_intersections:
+        # Use pre-calculated circle intersections with binary search
+        circle_center = intersection_data['center']
+        circle_radius = intersection_data['radius']
+        
+        # Calculate angle of current intersection point
+        current_angle = math.atan2(
+            intersection_point[1] - circle_center[1],
+            intersection_point[0] - circle_center[0]
+        )
+        
+        # Normalize current angle to [0, 2π]
+        current_angle = current_angle % (2 * math.pi)
+        
+        # Binary search to find our current position in the sorted intersections
+        # Convert all angles to [0, 2π] for comparison
+        normalized_intersections = []
+        for intersection in circle_intersections:
+            norm_angle = intersection['angle'] % (2 * math.pi)
+            normalized_intersections.append({
+                'angle': norm_angle,
+                'original': intersection
+            })
+        
+        # Sort by normalized angle
+        normalized_intersections.sort(key=lambda x: x['angle'])
+        
+        # Find the intersection closest to our current angle
+        best_match_idx = 0
+        min_angle_diff = float('inf')
+        
+        for i, intersection in enumerate(normalized_intersections):
+            angle_diff = abs(intersection['angle'] - current_angle)
+            # Also check wrapped difference
+            wrapped_diff = min(angle_diff, 2*math.pi - angle_diff)
+            
+            if wrapped_diff < min_angle_diff:
+                min_angle_diff = wrapped_diff
+                best_match_idx = i
+        
+        # Find next intersection in desired direction
+        if turn_left:
+            # Counterclockwise - next intersection in array (with wrapping)
+            next_idx = (best_match_idx + 1) % len(normalized_intersections)
+        else:
+            # Clockwise - previous intersection in array (with wrapping)
+            next_idx = (best_match_idx - 1) % len(normalized_intersections)
+        
+        if next_idx < len(normalized_intersections):
+            exit_intersection = normalized_intersections[next_idx]['original']
+            exit_point = exit_intersection['point']
+            
+            # Calculate direction toward exit point
+            direction_x = exit_point[0] - intersection_point[0]
+            direction_y = exit_point[1] - intersection_point[1]
+            
+            # Normalize direction
+            dir_length = math.sqrt(direction_x**2 + direction_y**2)
+            if dir_length > 0:
+                direction_x /= dir_length
+                direction_y /= dir_length
+                
+                # Return direction with arc information for drawing
+                arc_info = {
+                    'center': circle_center,
+                    'radius': circle_radius,
+                    'start_point': intersection_point,
+                    'end_point': exit_point
+                }
+                return (direction_x, direction_y, arc_info)
+        
+        # Fallback: use tangent direction if no intersections found
+        to_intersection_x = intersection_point[0] - circle_center[0]
+        to_intersection_y = intersection_point[1] - circle_center[1]
+        length = math.sqrt(to_intersection_x**2 + to_intersection_y**2)
+        
+        if length > 0:
+            to_intersection_x /= length
+            to_intersection_y /= length
+            
+            # Tangent direction
+            tangent_x = -to_intersection_y
+            tangent_y = to_intersection_x
+            
+            # Choose direction based on turn preference
+            if not turn_left:  # Right turn
+                tangent_x = -tangent_x
+                tangent_y = -tangent_y
+            
+            # Create a short arc segment in the tangent direction
+            arc_distance = min(50.0, circle_radius * 0.5)  # Short arc distance
+            end_point = (
+                intersection_point[0] + tangent_x * arc_distance,
+                intersection_point[1] + tangent_y * arc_distance
+            )
+            
+            arc_info = {
+                'center': circle_center,
+                'radius': circle_radius,
+                'start_point': intersection_point,
+                'end_point': end_point
+            }
+            return (tangent_x, tangent_y, arc_info)
+    
+    return None
+
 def convert_rectangles_to_lines(rectangles):
     """
     Convert a list of pygame.Rect objects to line segments.
@@ -1726,3 +1789,12 @@ def load_lines_from_file(filename="clipped_environment_lines.txt"):
     except Exception as e:
         print(f"Error loading lines from file: {e}")
         return {'lines': [], 'circles': []}
+
+
+
+
+
+
+
+
+

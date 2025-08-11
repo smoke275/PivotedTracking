@@ -67,6 +67,7 @@ class PositionEvaluator:
         # Environment and map graph integration
         self.environment = environment
         self.map_graph = map_graph
+        self.spatial_index = None  # Initialize spatial index to None
         
         # Closest node optimization infrastructure
         self._closest_node_cache: Dict[str, Tuple[int, float, float, float]] = {}  # agent_id -> (node_idx, x, y, timestamp)
@@ -268,21 +269,30 @@ class PositionEvaluator:
         self.agent_positions.clear()
         self.position_history.clear()
     
-    def set_environment_data(self, environment, map_graph):
+    def set_environment_data(self, environment, map_graph, spatial_index=None):
         """
         Set environment data for advanced position evaluation features.
         
         Args:
             environment: The simulation environment with walls and doors
             map_graph: The map graph for pathfinding
+            spatial_index: Optional SpatialIndex for O(1) node lookups
         """
         self.environment = environment
         self.map_graph = map_graph
+        self.spatial_index = spatial_index
         
-        # Mark KD-tree for rebuilding when map graph changes
+        # Mark KD-tree for rebuilding when map graph changes (fallback if no spatial index)
         self._kdtree_rebuild_needed = True
         self._closest_node_cache.clear()  # Clear cache when environment changes
-        print(f"Environment data updated. Map graph has {len(map_graph.nodes) if map_graph and hasattr(map_graph, 'nodes') else 0} nodes")
+        
+        node_count = len(map_graph.nodes) if map_graph and hasattr(map_graph, 'nodes') else 0
+        if spatial_index is not None:
+            print(f"Environment data updated with spatial index. Map graph has {node_count} nodes")
+            print(f"✅ Spatial index integrated for O(1) closest node queries")
+        else:
+            print(f"Environment data updated. Map graph has {node_count} nodes (no spatial index)")
+    
     
     def _build_map_graph_kdtree(self):
         """Build KD-tree for fast closest node queries."""
@@ -356,7 +366,7 @@ class PositionEvaluator:
     
     def _find_closest_node_optimized(self, x: float, y: float) -> Optional[int]:
         """
-        Optimized closest node search using KD-tree or vectorized operations.
+        Optimized closest node search using SpatialIndex (O(1)), KD-tree (O(log n)), or vectorized operations.
         
         Args:
             x, y: Query position
@@ -364,8 +374,18 @@ class PositionEvaluator:
         Returns:
             Index of closest node, or None if not found
         """
+        # First priority: Use spatial index for O(1) lookup
+        if hasattr(self, 'spatial_index') and self.spatial_index is not None:
+            try:
+                result = self.spatial_index.find_nearest_node(x, y)
+                if result:
+                    node_idx, distance = result
+                    return int(node_idx)
+            except Exception as e:
+                print(f"Spatial index query failed: {e}, falling back to KD-tree")
+        
+        # Second priority: Use KD-tree for O(log n) search
         if self._map_graph_kdtree is not None:
-            # Use KD-tree for O(log n) search
             try:
                 distance, index = self._map_graph_kdtree.query([x, y])
                 return int(index)
@@ -1418,9 +1438,9 @@ def get_stats() -> Dict:
     """Convenience function to get evaluator statistics."""
     return global_position_evaluator.get_statistics()
 
-def set_environment_data(environment, map_graph):
+def set_environment_data(environment, map_graph, spatial_index=None):
     """Convenience function to set environment data."""
-    global_position_evaluator.set_environment_data(environment, map_graph)
+    global_position_evaluator.set_environment_data(environment, map_graph, spatial_index)
 
 def find_closest_node(agent_id: str) -> Optional[int]:
     """Convenience function to find closest graph node to an agent."""
