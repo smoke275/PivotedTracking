@@ -1,0 +1,16 @@
+name: myenv
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12  # Latest stable Python version as of April 2025
+  - pip
+  - pip:
+    - numpy
+    - pandas
+    - matplotlib  # Common data science packages as examples
+    - pygame      # Added pygame package
+    - PyOpenGL 
+    - PyOpenGL_accelerate
+    - scipy
+    - torch 

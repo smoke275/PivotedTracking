@@ -760,6 +760,8 @@ def draw_polygon_exploration_paths(screen, polygon_exploration_paths):
         path_segments = path_data.get('path_segments', [])
         completed = path_data.get('completed', False)
         breakoff_line = path_data.get('breakoff_line', None)
+        is_merged_path = path_data.get('is_merged_path', False)
+        represented_paths = path_data.get('represented_paths', [])
         
         if len(path_points) < 2:
             continue
@@ -771,9 +773,17 @@ def draw_polygon_exploration_paths(screen, polygon_exploration_paths):
             path_color = completed_path_colors[color_index]
             completed_path_index += 1
             line_width = 10  # Much thicker for better visibility
+            
+            # If this is a merged path representing multiple breakpoints, make it extra thick
+            if is_merged_path and len(represented_paths) > 1:
+                line_width = 14  # Even thicker for merged paths
         else:
             path_color = (255, 100, 0)  # Bright orange-red for incomplete paths
             line_width = 8  # Thicker for incomplete paths
+            
+            # If this is a merged path representing multiple breakpoints, make it extra thick
+            if is_merged_path and len(represented_paths) > 1:
+                line_width = 12  # Even thicker for merged paths
         
         # Draw each segment individually based on its type
         for segment in path_segments:
@@ -969,76 +979,426 @@ def draw_polygon_exploration_paths(screen, polygon_exploration_paths):
             pygame.draw.rect(screen, breakoff_marker_color, square_rect)
             pygame.draw.rect(screen, (0, 0, 0), square_rect, 2)  # Black border
 
-def draw_projected_heatmap_nodes(screen, projected_heatmap_nodes, min_circle_size=1, max_circle_size=12):
+
+def draw_path_links(screen, path_links):
     """
-    Draw projected reachability heatmap values at map graph nodes as colored circles.
+    Draw connections between linked exploration paths.
+    Shows when one breakpoint's path contains another breakpoint.
     
     Args:
         screen: Pygame screen to draw on
-        projected_heatmap_nodes: List of (node_index, (x, y), reachability_value) tuples
-        min_circle_size: Minimum circle radius (for lowest values)
-        max_circle_size: Maximum circle radius (for highest values)
+        path_links: List of link dictionaries from detect_and_link_overlapping_paths()
     """
-    if not projected_heatmap_nodes:
+    if not path_links:
         return
     
-    # Find min and max reachability values for normalization
-    reachability_values = [value for _, _, value in projected_heatmap_nodes]
-    if not reachability_values:
+    for link in path_links:
+        from_point = link.get('from_breakpoint')
+        to_point = link.get('to_breakpoint')
+        link_type = link.get('link_type', 'containment')
+        
+        if not from_point or not to_point:
+            continue
+        
+        # Convert to integer coordinates
+        from_int = (int(from_point[0]), int(from_point[1]))
+        to_int = (int(to_point[0]), int(to_point[1]))
+        
+        # Draw the connection line
+        if link_type == 'mutual_containment':
+            # Double dashed line for mutual containment links (stronger connection)
+            link_color = (255, 255, 100)  # Bright yellow
+            line_width = 5
+            
+            # Draw double dashed line by drawing multiple small segments with different offsets
+            import math
+            distance = math.sqrt((to_int[0] - from_int[0])**2 + (to_int[1] - from_int[1])**2)
+            if distance > 0:
+                dash_length = 10
+                gap_length = 5
+                total_dash_cycle = dash_length + gap_length
+                num_cycles = int(distance / total_dash_cycle)
+                
+                dx = (to_int[0] - from_int[0]) / distance
+                dy = (to_int[1] - from_int[1]) / distance
+                
+                # Draw main dashed line
+                for i in range(num_cycles + 1):
+                    dash_start_dist = i * total_dash_cycle
+                    dash_end_dist = min(dash_start_dist + dash_length, distance)
+                    
+                    if dash_end_dist > dash_start_dist:
+                        dash_start = (
+                            int(from_int[0] + dx * dash_start_dist),
+                            int(from_int[1] + dy * dash_start_dist)
+                        )
+                        dash_end = (
+                            int(from_int[0] + dx * dash_end_dist),
+                            int(from_int[1] + dy * dash_end_dist)
+                        )
+                        pygame.draw.line(screen, link_color, dash_start, dash_end, line_width)
+        elif link_type == 'containment':
+            # Single dashed line for one-way containment links
+            link_color = (255, 255, 100)  # Bright yellow
+            line_width = 4
+            
+            # Draw dashed line by drawing multiple small segments
+            import math
+            distance = math.sqrt((to_int[0] - from_int[0])**2 + (to_int[1] - from_int[1])**2)
+            if distance > 0:
+                dash_length = 8
+                gap_length = 6
+                total_dash_cycle = dash_length + gap_length
+                num_cycles = int(distance / total_dash_cycle)
+                
+                dx = (to_int[0] - from_int[0]) / distance
+                dy = (to_int[1] - from_int[1]) / distance
+                
+                for i in range(num_cycles + 1):
+                    dash_start_dist = i * total_dash_cycle
+                    dash_end_dist = min(dash_start_dist + dash_length, distance)
+                    
+                    if dash_end_dist > dash_start_dist:
+                        dash_start = (
+                            int(from_int[0] + dx * dash_start_dist),
+                            int(from_int[1] + dy * dash_start_dist)
+                        )
+                        dash_end = (
+                            int(from_int[0] + dx * dash_end_dist),
+                            int(from_int[1] + dy * dash_end_dist)
+                        )
+                        pygame.draw.line(screen, link_color, dash_start, dash_end, line_width)
+        
+        # Draw connection markers at both ends
+        marker_radius = 8
+        marker_color = (255, 255, 100)  # Bright yellow
+        border_color = (0, 0, 0)  # Black border
+        
+        # From point marker (circle)
+        pygame.draw.circle(screen, marker_color, from_int, marker_radius)
+        pygame.draw.circle(screen, border_color, from_int, marker_radius, 2)
+        
+        # To point marker (triangle)
+        triangle_size = marker_radius
+        triangle_points = [
+            (to_int[0], to_int[1] - triangle_size),  # Top
+            (to_int[0] - triangle_size, to_int[1] + triangle_size),  # Bottom left
+            (to_int[0] + triangle_size, to_int[1] + triangle_size)   # Bottom right
+        ]
+        pygame.draw.polygon(screen, marker_color, triangle_points)
+        pygame.draw.polygon(screen, border_color, triangle_points, 2)
+
+
+def draw_measurement_line(screen, start_pos, end_pos, font, distance_px=None):
+    """
+    Draw a measurement line with distance information.
+    
+    Args:
+        screen: Pygame screen to draw on
+        start_pos: (x, y) starting position
+        end_pos: (x, y) ending position  
+        font: Font for text rendering
+        distance_px: Optional precalculated distance in pixels
+    """
+    if start_pos is None or end_pos is None:
         return
     
-    min_value = min(reachability_values)
-    max_value = max(reachability_values)
+    # Calculate distance if not provided
+    if distance_px is None:
+        dx = end_pos[0] - start_pos[0]
+        dy = end_pos[1] - start_pos[1]
+        distance_px = math.sqrt(dx * dx + dy * dy)
     
-    # Avoid division by zero
-    value_range = max_value - min_value
-    if value_range == 0:
-        value_range = 1.0
+    # Draw the measurement line
+    line_color = (255, 255, 0)  # Yellow
+    line_width = 2
+    pygame.draw.line(screen, line_color, start_pos, end_pos, line_width)
     
-    # Define threshold for very low values that get special treatment
-    # Use a more conservative threshold to ensure more values get the small dot treatment
-    very_low_threshold = min_value + (value_range * 0.10)  # Bottom 10% of values get small dots
+    # Draw start and end markers
+    marker_radius = 6
+    start_color = (0, 255, 0)  # Green
+    end_color = (255, 0, 0)    # Red
     
-    # Draw each node as a colored circle
-    for node_index, (x, y), reachability_value in projected_heatmap_nodes:
-        # Skip exact zeros (shouldn't happen due to filtering, but safety check)
-        if reachability_value <= 0.0:
+    pygame.draw.circle(screen, start_color, start_pos, marker_radius)
+    pygame.draw.circle(screen, (0, 0, 0), start_pos, marker_radius, 2)  # Black border
+    
+    pygame.draw.circle(screen, end_color, end_pos, marker_radius)
+    pygame.draw.circle(screen, (0, 0, 0), end_pos, marker_radius, 2)  # Black border
+    
+    # Calculate midpoint for text placement
+    mid_x = (start_pos[0] + end_pos[0]) // 2
+    mid_y = (start_pos[1] + end_pos[1]) // 2
+    
+    # Format distance text
+    distance_text = f"{distance_px:.1f} px"
+    
+    # Estimate world units (assuming roughly 1 pixel = 0.1 world units based on typical game scales)
+    world_distance = distance_px * 0.1
+    world_text = f"({world_distance:.1f} units)"
+    
+    # Render text with background for visibility
+    text_color = (255, 255, 255)  # White
+    bg_color = (0, 0, 0)         # Black background
+    
+    # Create text surfaces
+    dist_surface = font.render(distance_text, True, text_color)
+    world_surface = font.render(world_text, True, text_color)
+    
+    # Calculate text positions (offset from midpoint to avoid line)
+    text_offset_y = -25
+    dist_rect = dist_surface.get_rect(center=(mid_x, mid_y + text_offset_y))
+    world_rect = world_surface.get_rect(center=(mid_x, mid_y + text_offset_y + 15))
+    
+    # Draw text backgrounds
+    bg_margin = 2
+    dist_bg_rect = dist_rect.inflate(bg_margin * 2, bg_margin * 2)
+    world_bg_rect = world_rect.inflate(bg_margin * 2, bg_margin * 2)
+    
+    pygame.draw.rect(screen, bg_color, dist_bg_rect)
+    pygame.draw.rect(screen, bg_color, world_bg_rect)
+    
+    # Draw text
+    screen.blit(dist_surface, dist_rect)
+    screen.blit(world_surface, world_rect)
+
+def draw_reachability_overlay(screen, reachability_data, agent_x, agent_y, alpha=0.6):
+    """
+    Draw the reachability heatmap overlay as a transparent background.
+    
+    Args:
+        screen: Pygame screen to draw on
+        reachability_data: Tuple of (reachability_mask, world_bounds) from overlay API
+        agent_x, agent_y: Agent position (center of the reachability data)
+        alpha: Transparency level (default: 0.6)
+    """
+    if not reachability_data:
+        return
+    
+    reachability_mask, world_bounds = reachability_data
+    
+    # Extract world coordinate bounds
+    if isinstance(world_bounds, dict):
+        # Transform bounds from reachability grid coordinates to world coordinates
+        grid_x_min = world_bounds['x_min']
+        grid_x_max = world_bounds['x_max'] 
+        grid_y_min = world_bounds['y_min']
+        grid_y_max = world_bounds['y_max']
+        
+        # Translate the bounds to be centered at the agent position
+        world_x_min = agent_x + grid_x_min
+        world_x_max = agent_x + grid_x_max
+        world_y_min = agent_y + grid_y_min
+        world_y_max = agent_y + grid_y_max
+    else:
+        # Fallback if bounds are in list/tuple format
+        world_x_min, world_y_min, world_x_max, world_y_max = world_bounds
+    
+    # Create a surface for the heatmap
+    width = int(world_x_max - world_x_min)
+    height = int(world_y_max - world_y_min)
+    
+    if width <= 0 or height <= 0:
+        return
+    
+    # Create the heatmap surface
+    heatmap_surface = pygame.Surface((width, height))
+    heatmap_surface.set_alpha(int(alpha * 255))
+    
+    # Convert numpy array to pygame surface with hot colormap
+    # Scale values from 0-1 to 0-255
+    scaled_mask = (reachability_mask * 255).astype(np.uint8)
+    
+    # Apply hot colormap (red-yellow for high reachability)
+    colored_mask = np.zeros((scaled_mask.shape[0], scaled_mask.shape[1], 3), dtype=np.uint8)
+    
+    for i in range(scaled_mask.shape[0]):
+        for j in range(scaled_mask.shape[1]):
+            value = scaled_mask[i, j]
+            if value > 0:
+                # Hot colormap: black -> red -> yellow -> white
+                if value < 85:  # Black to red
+                    colored_mask[i, j] = [value * 3, 0, 0]
+                elif value < 170:  # Red to yellow
+                    colored_mask[i, j] = [255, (value - 85) * 3, 0]
+                else:  # Yellow to white
+                    colored_mask[i, j] = [255, 255, (value - 170) * 3]
+    
+    # Create surface from the colored array
+    pygame.surfarray.blit_array(heatmap_surface, colored_mask.swapaxes(0, 1))
+    
+    # Draw the heatmap on screen
+    screen.blit(heatmap_surface, (int(world_x_min), int(world_y_min)))
+
+def draw_path_analysis_data(screen, path_analysis_data):
+    """
+    Draw path analysis data including first edges and orientations.
+    
+    Args:
+        screen: Pygame screen to draw on
+        path_analysis_data: List of path analysis dictionaries from overlay API
+    """
+    if not path_analysis_data:
+        return
+    
+    # Colors for different path analysis elements
+    first_edge_colors = ['cyan', 'gold', 'lime', 'hotpink', 'turquoise', 'yellow', 'lightgreen', 'orange']
+    
+    for i, path_info in enumerate(path_analysis_data):
+        first_edge = path_info.get('first_edge')
+        orientation = path_info.get('orientation')
+        target_point = path_info.get('target_point')
+        
+        if first_edge is None:
             continue
             
-        # Normalize reachability value to [0, 1]
-        normalized_value = (reachability_value - min_value) / value_range
+        edge_color_name = first_edge_colors[i % len(first_edge_colors)]
+        # Convert color name to RGB
+        color_map = {
+            'cyan': (0, 255, 255),
+            'gold': (255, 215, 0),
+            'lime': (0, 255, 0),
+            'hotpink': (255, 105, 180),
+            'turquoise': (64, 224, 208),
+            'yellow': (255, 255, 0),
+            'lightgreen': (144, 238, 144),
+            'orange': (255, 165, 0)
+        }
+        edge_color = color_map.get(edge_color_name, (255, 255, 255))
         
-        # Handle very low values with special small dot size
-        # Always ensure non-zero values are visible with at least 1-pixel dots
-        if reachability_value <= very_low_threshold:
-            circle_size = 1  # Very small dot for very low values
+        # Draw first edge
+        if first_edge['type'] == 'line':
+            start = first_edge['start']
+            end = first_edge['end']
+            pygame.draw.line(screen, edge_color, 
+                           (int(start[0]), int(start[1])), 
+                           (int(end[0]), int(end[1])), 6)
+            
+            # Add start and end markers
+            pygame.draw.circle(screen, edge_color, (int(start[0]), int(start[1])), 8)
+            pygame.draw.circle(screen, (0, 0, 0), (int(start[0]), int(start[1])), 8, 2)
+            pygame.draw.circle(screen, edge_color, (int(end[0]), int(end[1])), 8)
+            pygame.draw.circle(screen, (0, 0, 0), (int(end[0]), int(end[1])), 8, 2)
+                   
+        elif first_edge['type'] == 'arc':
+            # Draw arc edge (simplified as line between start and end points)
+            start = first_edge.get('start')
+            end = first_edge.get('end')
+            if start and end:
+                pygame.draw.line(screen, edge_color, 
+                               (int(start[0]), int(start[1])), 
+                               (int(end[0]), int(end[1])), 6)
+                
+                # Add start and end markers
+                pygame.draw.circle(screen, edge_color, (int(start[0]), int(start[1])), 8)
+                pygame.draw.circle(screen, (0, 0, 0), (int(start[0]), int(start[1])), 8, 2)
+                pygame.draw.circle(screen, edge_color, (int(end[0]), int(end[1])), 8)
+                pygame.draw.circle(screen, (0, 0, 0), (int(end[0]), int(end[1])), 8, 2)
+        
+        # Draw orientation arrow if available
+        if orientation is not None and target_point is not None:
+            arrow_start_x = target_point[0]
+            arrow_start_y = target_point[1]
+            
+            # Calculate arrow end position using orientation
+            arrow_length = 40
+            arrow_end_x = arrow_start_x + arrow_length * math.cos(orientation)
+            arrow_end_y = arrow_start_y + arrow_length * math.sin(orientation)
+            
+            # Draw orientation arrow
+            pygame.draw.line(screen, edge_color, 
+                           (int(arrow_start_x), int(arrow_start_y)),
+                           (int(arrow_end_x), int(arrow_end_y)), 4)
+            
+            # Draw arrowhead
+            arrowhead_length = 10
+            arrowhead_angle = math.pi / 6  # 30 degrees
+            
+            # Calculate arrowhead points
+            arrowhead1_x = arrow_end_x - arrowhead_length * math.cos(orientation - arrowhead_angle)
+            arrowhead1_y = arrow_end_y - arrowhead_length * math.sin(orientation - arrowhead_angle)
+            arrowhead2_x = arrow_end_x - arrowhead_length * math.cos(orientation + arrowhead_angle)
+            arrowhead2_y = arrow_end_y - arrowhead_length * math.sin(orientation + arrowhead_angle)
+            
+            # Draw arrowhead lines
+            pygame.draw.line(screen, edge_color, 
+                           (int(arrow_end_x), int(arrow_end_y)),
+                           (int(arrowhead1_x), int(arrowhead1_y)), 4)
+            pygame.draw.line(screen, edge_color, 
+                           (int(arrow_end_x), int(arrow_end_y)),
+                           (int(arrowhead2_x), int(arrowhead2_y)), 4)
+            
+            # Add small circle at arrow start
+            pygame.draw.circle(screen, edge_color, (int(arrow_start_x), int(arrow_start_y)), 6)
+            pygame.draw.circle(screen, (0, 0, 0), (int(arrow_start_x), int(arrow_start_y)), 6, 1)
+        
+        # Add text annotation for first edge identification
+        if first_edge.get('start') and first_edge.get('end'):
+            mid_x = (first_edge['start'][0] + first_edge['end'][0]) / 2
+            mid_y = (first_edge['start'][1] + first_edge['end'][1]) / 2
+            
+            # Create text surface
+            font = pygame.font.SysFont('Arial', 12, bold=True)
+            text = f'1st-{i+1}'
+            text_surface = font.render(text, True, (255, 255, 255))
+            text_rect = text_surface.get_rect(center=(int(mid_x), int(mid_y)))
+            
+            # Draw background
+            bg_rect = text_rect.inflate(6, 4)
+            pygame.draw.rect(screen, edge_color, bg_rect)
+            pygame.draw.rect(screen, (0, 0, 0), bg_rect, 1)
+            
+            # Draw text
+            screen.blit(text_surface, text_rect)
+
+def draw_sample_points(screen, sample_points_data):
+    """
+    Draw sample points where reachability values were evaluated.
+    
+    Args:
+        screen: Pygame screen to draw on
+        sample_points_data: List of sample point dictionaries from overlay API
+    """
+    if not sample_points_data:
+        return
+    
+    for i, sample_info in enumerate(sample_points_data):
+        sample_x, sample_y = sample_info['sample_point']
+        target_value = sample_info['target_value']
+        
+        # Calculate boosted value (50% increase, capped at 1.0) to match processing
+        boosted_value = min(1.0, target_value * 1.5)
+        
+        # Choose color based on boosted value (heat map style)
+        if boosted_value > 0.7:
+            sample_color = (255, 0, 0)  # Red
+        elif boosted_value > 0.4:
+            sample_color = (255, 165, 0)  # Orange
+        elif boosted_value > 0.1:
+            sample_color = (255, 255, 0)  # Yellow
         else:
-            # Calculate circle size based on normalized value for other values
-            # Remap normalized value to exclude the very low range
-            adjusted_normalized = (reachability_value - very_low_threshold) / (max_value - very_low_threshold)
-            adjusted_normalized = max(0.0, min(1.0, adjusted_normalized))
-            circle_size = int(2 + (max_circle_size - 2) * adjusted_normalized)  # Start from size 2 for non-very-low values
+            sample_color = (173, 216, 230)  # Light blue
         
-        # Ensure minimum size of 1 pixel for any non-zero value
-        circle_size = max(1, circle_size)
+        # Draw sample point with distinctive diamond marker
+        points = [
+            (int(sample_x), int(sample_y - 12)),  # Top
+            (int(sample_x + 12), int(sample_y)),  # Right
+            (int(sample_x), int(sample_y + 12)),  # Bottom
+            (int(sample_x - 12), int(sample_y))   # Left
+        ]
+        pygame.draw.polygon(screen, sample_color, points)
+        pygame.draw.polygon(screen, (0, 0, 0), points, 2)
         
-        # Color mapping: green (low) to red (high) reachability
-        # Low values = green (less reachable)
-        # High values = red (more reachable) 
-        red_component = int(255 * normalized_value)
-        green_component = int(255 * (1.0 - normalized_value))
-        blue_component = 0
+        # Add sample value annotation
+        font = pygame.font.SysFont('Arial', 10, bold=True)
+        text = f'{target_value:.2f}→{boosted_value:.2f}'
+        text_surface = font.render(text, True, (0, 0, 0))
+        text_rect = text_surface.get_rect(center=(int(sample_x + 20), int(sample_y - 15)))
         
-        # Ensure color components are in valid range
-        red_component = max(0, min(255, red_component))
-        green_component = max(0, min(255, green_component))
+        # Draw background
+        bg_rect = text_rect.inflate(4, 2)
+        pygame.draw.rect(screen, (255, 255, 255), bg_rect)
+        pygame.draw.rect(screen, (0, 0, 0), bg_rect, 1)
         
-        node_color = (red_component, green_component, blue_component)
-        
-        # Draw the circle at the node position
-        center_pos = (int(x), int(y))
-        pygame.draw.circle(screen, node_color, center_pos, circle_size)
-        
-        # Add a small black border for better visibility, but only for larger circles
-        if circle_size > 1:
-            pygame.draw.circle(screen, (0, 0, 0), center_pos, circle_size, 1)
+        # Draw text
+        screen.blit(text_surface, text_rect)
+

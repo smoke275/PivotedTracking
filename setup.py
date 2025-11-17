@@ -47,6 +47,26 @@ ext_modules = [
         ],
         extra_link_args=['-O3'],
     ),
+    # Added reachability mask accelerated module
+    Pybind11Extension(
+        "fast_reachability",
+        [
+            "cpp_extensions/fast_reachability.cpp",
+        ],
+        include_dirs=[
+            pybind11.get_include(),
+            np.get_include(),
+        ],
+        language='c++',
+        cxx_std=17,
+        extra_compile_args=[
+            '-O3',
+            '-march=native',
+            '-mtune=native',
+            '-ffast-math',
+        ],
+        extra_link_args=['-O3'],
+    ),
 ]
 
 setup(

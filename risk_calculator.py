@@ -8,6 +8,7 @@ import pickle
 import numpy as np
 import math
 import time
+import pygame
 
 # Import environment constants for world boundary checking
 try:
@@ -18,397 +19,37 @@ except ImportError:
     ENVIRONMENT_HEIGHT = 720
 
 # Import polygon exploration functionality
-# from polygon_exploration_cpp import calculate_polygon_exploration_paths_cpp as calculate_polygon_exploration_paths
-from polygon_exploration import calculate_polygon_exploration_paths  # Fallback if C++ not available 
+from polygon_exploration_cpp import calculate_polygon_exploration_paths_cpp as calculate_polygon_exploration_paths
+# from polygon_exploration import calculate_polygon_exploration_paths  # Fallback if C++ not available
 
+# Import helper modules
+from reachability_utils import (
+    _get_cached_array,
+    load_reachability_mask,
+    world_to_grid_coords,
+    get_reachability_probabilities_for_fixed_grid,
+    get_reachability_at_position
+)
+from geometry_utils import (
+    generate_rectangular_buffer_and_convert,
+    point_to_line_distance,
+    calculate_breakoff_line_midpoints,
+    calculate_exploration_offset_points,
+    convert_rectangles_to_lines,
+    vectorized_point_in_polygon
+)
 
-def generate_rectangular_buffer_and_convert(wall_rect):
-    """
-    Generate a rectangular buffer around a wall using Shapely and convert back to pygame.Rect format.
-    
-    Args:
-        wall_rect: pygame.Rect object representing the original wall
-        
-    Returns:
-        pygame.Rect object representing the buffered wall
-    """
-    try:
-        from shapely.geometry import Polygon
-        from shapely.ops import unary_union
-        import pygame
-        
-        # Convert pygame.Rect to shapely Polygon
-        x, y, width, height = wall_rect.x, wall_rect.y, wall_rect.width, wall_rect.height
-        
-        # Create polygon from rectangle coordinates
-        wall_polygon = Polygon([
-            (x, y),                    # Top-left
-            (x + width, y),            # Top-right
-            (x + width, y + height),   # Bottom-right
-            (x, y + height)            # Bottom-left
-        ])
-        
-        # Apply buffer (you can adjust the buffer distance as needed)
-        buffer_distance = 2.0  # Buffer distance in pixels
-        buffered_polygon = wall_polygon.buffer(buffer_distance, join_style=2)  # join_style=2 for mitered joins
-        
-        # Convert back to pygame.Rect
-        # Get bounding box of buffered polygon
-        minx, miny, maxx, maxy = buffered_polygon.bounds
-        
-        # Create new pygame.Rect from bounding box
-        buffered_rect = pygame.Rect(
-            int(minx), 
-            int(miny), 
-            int(maxx - minx), 
-            int(maxy - miny)
-        )
-        
-        return buffered_rect
-        
-    except ImportError:
-        print("Warning: Shapely not available, using original wall without buffering")
-        return wall_rect
-    except Exception as e:
-        print(f"Warning: Error applying shapely buffer: {e}, using original wall")
-        return wall_rect
-
-# Global cache for reusable arrays to avoid allocation overhead
-_ARRAY_CACHE = {}
-
-def _get_cached_array(key, shape, dtype):
-    """Get a cached array or create a new one if needed."""
-    cache_key = (key, shape, dtype.name)
-    if cache_key not in _ARRAY_CACHE:
-        _ARRAY_CACHE[cache_key] = np.empty(shape, dtype=dtype)
-    return _ARRAY_CACHE[cache_key]
-
-def load_reachability_mask(filename_base="unicycle_grid"):
-    """Load reachability mask from pickle file."""
-    try:
-        with open(f"{filename_base}.pkl", 'rb') as f:
-            data = pickle.load(f)
-        return data
-    except FileNotFoundError:
-        print(f"Warning: {filename_base}.pkl not found. Run heatmap.py first to generate reachability mask.")
-        return None
-    except Exception as e:
-        print(f"Error loading reachability mask: {e}")
-        return None
-
-def world_to_grid_coords(world_x, world_y, mask_data):
-    """Convert world coordinates to grid indices."""
-    center = mask_data['center_idx']
-    cell_size = mask_data['cell_size_px']
-    
-    grid_col = int(world_x / cell_size + center)
-    grid_row = int(center - world_y / cell_size)
-    
-    return grid_row, grid_col
-
-def get_reachability_probabilities_for_fixed_grid(agent_x, agent_y, agent_theta, mask_data):
-    """Calculate reachability probabilities for a fixed grid centered on agent (ultra-optimized)."""
-    grid_size = mask_data['grid_size']
-    cell_size = mask_data['cell_size_px']
-    original_center = mask_data['center_idx']
-    original_grid = mask_data['grid']
-    
-    # Pre-compute constants and use float32 for better cache performance
-    center_f = float(grid_size // 2)
-    cos_theta = np.float32(np.cos(agent_theta))
-    sin_theta = np.float32(np.sin(agent_theta))
-    inv_cell_size = np.float32(1.0 / cell_size)
-    original_center_f = np.float32(original_center)
-    
-    # Create optimized coordinate arrays
-    coords = np.arange(grid_size, dtype=np.float32)
-    j_coords = coords - center_f
-    i_coords = center_f - coords
-    
-    # Use outer operations for memory-efficient broadcasting
-    # This avoids creating large intermediate arrays
-    j_scaled = j_coords * cell_size
-    i_scaled = i_coords * cell_size
-    
-    # Compute rotation using efficient numpy operations
-    # Create the rotated coordinate grids using outer product pattern
-    j_cos = j_scaled * cos_theta  # 1D array
-    j_sin = j_scaled * sin_theta  # 1D array
-    i_cos = i_scaled * cos_theta  # 1D array  
-    i_sin = i_scaled * sin_theta  # 1D array
-    
-    # Use broadcasting to create final coordinate arrays
-    orig_rel_x = j_cos[np.newaxis, :] - i_sin[:, np.newaxis]  # Broadcasting
-    orig_rel_y = j_sin[np.newaxis, :] + i_cos[:, np.newaxis]  # Broadcasting
-    
-    # Optimized index conversion with combined operations
-    orig_col = np.round(orig_rel_x * inv_cell_size + original_center_f).astype(np.int32)
-    orig_row = np.round(original_center_f - orig_rel_y * inv_cell_size).astype(np.int32)
-    
-    # Efficient bounds checking using numpy's logical operations
-    valid_mask = ((orig_row >= 0) & (orig_row < grid_size) & 
-                 (orig_col >= 0) & (orig_col < grid_size))
-    
-    # Initialize result grid with correct dtype
-    result_grid = np.zeros((grid_size, grid_size), dtype=original_grid.dtype)
-    
-    # Use the most efficient indexing pattern
-    if np.any(valid_mask):
-        # Extract valid indices in one operation
-        valid_indices = np.where(valid_mask)
-        valid_orig_rows = orig_row[valid_indices]
-        valid_orig_cols = orig_col[valid_indices]
-        
-        # Single assignment operation
-        result_grid[valid_indices] = original_grid[valid_orig_rows, valid_orig_cols]
-    
-    return result_grid
-
-def get_reachability_at_position(agent_x, agent_y, agent_theta, mask_data):
-    """Get reachability probability at agent's current position."""
-    fixed_grid_probs = get_reachability_probabilities_for_fixed_grid(agent_x, agent_y, agent_theta, mask_data)
-    center_idx = mask_data['center_idx']
-    return fixed_grid_probs[center_idx, center_idx]
-
-def calculate_evader_visibility(agent_x, agent_y, visibility_range, walls, doors, num_rays=100):
-    """
-    Calculate 360-degree visibility for the evader by shooting rays in all directions.
-    Now automatically uses C++ optimization when available.
-    
-    Args:
-        agent_x, agent_y: Evader position
-        visibility_range: Maximum visibility distance
-        walls: List of wall rectangles that block vision
-        doors: List of door rectangles that allow vision through
-        num_rays: Number of rays to cast (default 72 = 5-degree increments for good balance)
-        
-    Returns:
-        List of (angle, endpoint, distance, blocked) tuples where:
-        - angle: Ray angle in radians
-        - endpoint: (x, y) where ray ends
-        - distance: Distance from agent to endpoint
-        - blocked: True if ray hit a wall, False if reached max range
-        
-    Ray Configuration:
-        - Default: 100 rays = 3.6° angular resolution (360° / 100 = 3.6°)
-        - Ray 0: 0° (East), Ray 25: 90° (North), Ray 50: 180° (West), Ray 75: 270° (South)
-        - Each ray tests collision with all wall segments
-        - Rays can pass through doors but are blocked by walls
-        - Distance tolerance of 1 pixel to determine if ray was blocked
-        
-    Performance:
-        - Automatically uses C++ implementation for 5-15x speedup when available
-        - Falls back to Python implementation if C++ extension not built
-        - Build C++ extension with: python setup.py build_ext --inplace
-    """
-    try:
-        # Try to use the optimized implementation
-        from fast_visibility_calculator import calculate_visibility_optimized
-        return calculate_visibility_optimized(agent_x, agent_y, visibility_range, walls, doors, num_rays)
-    except ImportError:
-        # Fallback to original implementation
-        from multitrack.utils.vision import cast_vision_ray
-        
-        visibility_data = []
-        angle_step = (2 * math.pi) / num_rays
-        
-        for i in range(num_rays):
-            angle = i * angle_step
-            
-            # Cast ray in this direction
-            endpoint = cast_vision_ray(
-                agent_x, agent_y, angle, visibility_range, walls, doors
-            )
-            
-            # Calculate distance to endpoint
-            distance = math.sqrt((endpoint[0] - agent_x)**2 + (endpoint[1] - agent_y)**2)
-            
-            # Check if ray was blocked (distance less than max range)
-            blocked = distance < visibility_range - 1  # Small tolerance
-            
-            visibility_data.append((angle, endpoint, distance, blocked))
-        
-        return visibility_data
-
-def get_visibility_statistics(visibility_data):
-    """
-    Calculate statistics from visibility data.
-    
-    Args:
-        visibility_data: List from calculate_evader_visibility()
-        
-    Returns:
-        Dict with visibility statistics
-    """
-    if not visibility_data:
-        return {
-            'total_rays': 0,
-            'clear_rays': 0,
-            'blocked_rays': 0,
-            'visibility_percentage': 0.0,
-            'average_visibility_distance': 0.0,
-            'max_visibility_distance': 0.0,
-            'min_visibility_distance': 0.0
-        }
-    
-    total_rays = len(visibility_data)
-    blocked_rays = sum(1 for _, _, _, blocked in visibility_data if blocked)
-    clear_rays = total_rays - blocked_rays
-    
-    distances = [distance for _, _, distance, _ in visibility_data]
-    
-    return {
-        'total_rays': total_rays,
-        'clear_rays': clear_rays,
-        'blocked_rays': blocked_rays,
-        'visibility_percentage': (clear_rays / total_rays * 100) if total_rays > 0 else 0.0,
-        'average_visibility_distance': sum(distances) / len(distances) if distances else 0.0,
-        'max_visibility_distance': max(distances) if distances else 0.0,
-        'min_visibility_distance': min(distances) if distances else 0.0
-    }
-
-def calculate_visibility_sectors(visibility_data, num_sectors=8):
-    """
-    Analyze visibility by sectors (like compass directions).
-    
-    Args:
-        visibility_data: List from calculate_evader_visibility()
-        num_sectors: Number of sectors to divide 360° into (default 8 = 45° each)
-        
-    Returns:
-        List of sector statistics
-    """
-    if not visibility_data:
-        return []
-    
-    sector_angle = 2 * math.pi / num_sectors
-    sectors = [[] for _ in range(num_sectors)]
-    
-    # Group rays by sector
-    for angle, endpoint, distance, blocked in visibility_data:
-        sector_idx = int(angle / sector_angle) % num_sectors
-        sectors[sector_idx].append((angle, endpoint, distance, blocked))
-    
-    # Calculate statistics for each sector
-    sector_stats = []
-    for i, sector_rays in enumerate(sectors):
-        if sector_rays:
-            blocked_count = sum(1 for _, _, _, blocked in sector_rays if blocked)
-            total_count = len(sector_rays)
-            clear_count = total_count - blocked_count
-            avg_distance = sum(distance for _, _, distance, _ in sector_rays) / total_count
-            
-            sector_stats.append({
-                'sector_index': i,
-                'start_angle_deg': i * (360 / num_sectors),
-                'end_angle_deg': (i + 1) * (360 / num_sectors),
-                'total_rays': total_count,
-                'clear_rays': clear_count,
-                'blocked_rays': blocked_count,
-                'visibility_percentage': (clear_count / total_count * 100) if total_count > 0 else 0.0,
-                'average_distance': avg_distance
-            })
-        else:
-            sector_stats.append({
-                'sector_index': i,
-                'start_angle_deg': i * (360 / num_sectors),
-                'end_angle_deg': (i + 1) * (360 / num_sectors),
-                'total_rays': 0,
-                'clear_rays': 0,
-                'blocked_rays': 0,
-                'visibility_percentage': 0.0,
-                'average_distance': 0.0
-            })
-    
-    return sector_stats
-
-def detect_visibility_breakoff_points(visibility_data, min_gap_distance=30, agent_x=None, agent_y=None, agent_theta=None):
-    """
-    Detect visibility breakoff points where there are abrupt changes in ray distances.
-    Now includes orientation detection and distance transition classification.
-    
-    Args:
-        visibility_data: List from calculate_evader_visibility()
-        min_gap_distance: Minimum distance difference to consider a gap (default 30 pixels)
-        agent_x, agent_y: Agent position (required for orientation calculation)
-        agent_theta: Agent orientation in radians (required for orientation calculation)
-        
-    Returns:
-        Tuple of (breakoff_points, breakoff_lines) where:
-        - breakoff_points: List of (x, y, category) tuples where category is one of:
-          'clockwise_near_far', 'clockwise_far_near', 'counterclockwise_near_far', 'counterclockwise_far_near'
-        - breakoff_lines: List of (start_point, end_point, gap_size, category) tuples for connecting lines
-    """
-    if not visibility_data or len(visibility_data) < 2:
-        return [], []
-    
-    breakoff_points = []
-    breakoff_lines = []
-    
-    for i in range(len(visibility_data)):
-        current_data = visibility_data[i]
-        next_data = visibility_data[(i + 1) % len(visibility_data)]  # Wrap around
-        
-        current_distance = current_data[2]  # distance field
-        next_distance = next_data[2]
-        current_endpoint = current_data[1]  # endpoint field  
-        next_endpoint = next_data[1]
-        current_angle = current_data[0]  # angle field
-        next_angle = next_data[0]
-        
-        # Check for significant distance change (gap) between successive rays
-        distance_diff = abs(current_distance - next_distance)
-        if distance_diff > min_gap_distance:
-            # Determine distance transition type
-            distance_transition = 'near_far' if current_distance < next_distance else 'far_near'
-            
-            # Determine orientation relative to agent's heading
-            orientation_prefix = 'unknown'
-            if agent_x is not None and agent_y is not None and agent_theta is not None:
-                # Calculate the relative angle of the gap midpoint to agent's heading
-                gap_midpoint_angle = (current_angle + next_angle) / 2
-                
-                # Handle angle wrapping for proper midpoint calculation
-                angle_diff = next_angle - current_angle
-                if angle_diff > math.pi:
-                    angle_diff -= 2 * math.pi
-                elif angle_diff < -math.pi:
-                    angle_diff += 2 * math.pi
-                gap_midpoint_angle = current_angle + angle_diff / 2
-                
-                # Normalize the gap midpoint angle
-                while gap_midpoint_angle > math.pi:
-                    gap_midpoint_angle -= 2 * math.pi
-                while gap_midpoint_angle <= -math.pi:
-                    gap_midpoint_angle += 2 * math.pi
-                
-                # Calculate relative angle from agent's heading
-                relative_angle = gap_midpoint_angle - agent_theta
-                
-                # Normalize relative angle to [-π, π]
-                while relative_angle > math.pi:
-                    relative_angle -= 2 * math.pi
-                while relative_angle <= -math.pi:
-                    relative_angle += 2 * math.pi
-                
-                # Determine if gap is clockwise or counterclockwise relative to agent's heading
-                # Positive relative angle = counterclockwise, negative = clockwise
-                orientation_prefix = 'counterclockwise' if relative_angle > 0 else 'clockwise'
-            
-            # Combine orientation and distance transition into category
-            category = f"{orientation_prefix}_{distance_transition}"
-            
-            # Mark both endpoints as breakoff points with category
-            breakoff_points.extend([
-                (current_endpoint[0], current_endpoint[1], category),
-                (next_endpoint[0], next_endpoint[1], category)
-            ])
-            # Store line connecting the breakoff points with category
-            breakoff_lines.append((current_endpoint, next_endpoint, distance_diff, category))
-    
-    return breakoff_points, breakoff_lines
-
-
+# Import new utility modules
+from visibility_utils import (
+    calculate_evader_visibility,
+    get_visibility_statistics,
+    calculate_visibility_sectors,
+    detect_visibility_breakoff_points,
+    create_visibility_boundary_polygon,
+    convert_visibility_rays_to_walls,
+    create_ray_connecting_walls,
+    create_visibility_circle_walls
+)
 class EvaderAnalysis:
     """
     Unified container for all evader analysis data.
@@ -428,6 +69,12 @@ class EvaderAnalysis:
         self.exploration_nearest_nodes = None  # Nearest map graph nodes to exploration points
         self.polygon_exploration_paths = None  # Polygon exploration paths for breakpoints
         self.exploration_graph = None  # Intersection graph from polygon exploration
+        self.path_links = None  # Links between overlapping exploration paths
+        
+        # Reachability overlay processing results (from overlay API)
+        self.path_analysis_data = None  # Path analysis data with first edges, orientations, etc.
+        self.reachability_overlay_data = None  # Reachability mask and bounds for visualization
+        self.sample_points_data = None  # Sample points where reachability values were evaluated
         
         # Environment clipping data for performance optimization
         self.clipped_walls = None  # Walls within visibility range
@@ -437,14 +84,17 @@ class EvaderAnalysis:
         self.visibility_circle = None  # Visibility circle as simple circle parameters
         self.visibility_boundary_polygon = None  # Polygon connecting all visibility ray endpoints
         
-        # Projected heatmap data for map graph nodes
-        self.projected_heatmap_nodes = None  # List of (node_index, position, reachability_value) tuples
-        
         # Future extensibility - easily add new analysis types
         self.rods = None  # For future rod analysis
         self.threat_assessment = None  # For future threat analysis
         self.escape_routes = None  # For future escape route analysis
         self.pursuit_advantage = None  # For future pursuit analysis
+        
+        # Clipped reachability heatmap within visibility circle
+        self.clipped_reachability_grid = None  # Reachability heatmap clipped to visibility circle
+        
+        # Map graph node highlighting data
+        self.highlighted_nodes = None  # Dictionary containing nodes to highlight with categories
         
         # Metadata
         self.agent_position = None
@@ -452,6 +102,7 @@ class EvaderAnalysis:
         self.visibility_range = None
         self.analysis_timestamp = None
         self.spatial_index = None  # Spatial index for fast spatial queries
+
 
 def clip_environment_to_visibility_range(agent_x, agent_y, visibility_range, walls, doors=None):
     """
@@ -533,349 +184,6 @@ def clip_environment_to_visibility_range(agent_x, agent_y, visibility_range, wal
     
     return clipped_walls, clipped_doors, bounding_box, clipping_stats
 
-def vectorized_point_in_polygon(x, y, polygon_points):
-    """
-    Vectorized point-in-polygon test using ray casting algorithm.
-    
-    Args:
-        x, y: numpy arrays of point coordinates to test
-        polygon_points: List of (x, y) tuples defining the polygon vertices
-        
-    Returns:
-        numpy boolean array indicating which points are inside the polygon
-    """
-    if len(polygon_points) < 3:
-        return np.zeros(len(x), dtype=bool)
-    
-    try:
-        # Convert polygon to numpy array
-        poly = np.array(polygon_points, dtype=np.float32)
-        n_vertices = len(poly)
-        
-        # Ensure polygon is closed
-        if not np.allclose(poly[0], poly[-1]):
-            poly = np.vstack([poly, poly[0]])
-            n_vertices += 1
-        
-        # Initialize result array
-        inside = np.zeros(len(x), dtype=bool)
-        
-        # Ray casting algorithm - vectorized
-        for i in range(n_vertices - 1):
-            x1, y1 = poly[i]
-            x2, y2 = poly[i + 1]
-            
-            # Check if ray crosses edge
-            cond1 = (y1 > y) != (y2 > y)
-            
-            # Calculate intersection x-coordinate
-            # Only compute where cond1 is True to avoid division by zero
-            where_cond1 = np.where(cond1)
-            if len(where_cond1[0]) > 0:
-                y_subset = y[where_cond1]
-                x_subset = x[where_cond1]
-                
-                # Avoid division by zero
-                y_diff = y2 - y1
-                if abs(y_diff) > 1e-10:  # Not horizontal line
-                    x_intersect = x1 + (y_subset - y1) * (x2 - x1) / y_diff
-                    cond2 = x_subset < x_intersect
-                    inside[where_cond1] ^= cond2  # XOR to toggle
-        
-        return inside
-        
-    except Exception as e:
-        print(f"Warning: Error in vectorized point-in-polygon test: {e}")
-        # Fallback: return all True (no polygon constraint)
-        return np.ones(len(x), dtype=bool)
-
-def calculate_projected_heatmap_at_nodes_optimized_bounding_box(agent_x, agent_y, agent_theta, visibility_range, mask_data, spatial_index, visibility_polygon=None):
-    """
-    Ultra-optimized version using spatial bounding box queries and vectorized operations.
-    Optionally uses visibility polygon rasterization to constrain calculation area.
-    
-    This approach:
-    1. Uses spatial index to query only nodes within bounding box
-    2. Pre-allocates numpy arrays for the bounding region
-    3. Uses vectorized operations throughout
-    4. Minimizes memory allocations
-    5. Optionally constrains to visibility polygon area using rasterization
-    
-    Args:
-        agent_x, agent_y: Agent position
-        agent_theta: Agent orientation in radians
-        visibility_range: Visibility range for filtering nodes
-        mask_data: Reachability mask data
-        spatial_index: Spatial index to get map graph nodes
-        visibility_polygon: Optional list of (x, y) points defining visibility boundary
-        
-    Returns:
-        List of (node_index, (x, y), reachability_value) tuples for nodes within visibility range
-    """
-    if mask_data is None or spatial_index is None:
-        return []
-    
-    try:
-        # Define bounding box for visibility circle in world coordinates
-        bbox_min_x = agent_x - visibility_range
-        bbox_max_x = agent_x + visibility_range
-        bbox_min_y = agent_y - visibility_range
-        bbox_max_y = agent_y + visibility_range
-        
-        # If visibility polygon is provided, use its bounding box instead
-        if visibility_polygon and len(visibility_polygon) >= 3:
-            try:
-                polygon_array = np.array(visibility_polygon, dtype=np.float32)
-                bbox_min_x = max(bbox_min_x, np.min(polygon_array[:, 0]))
-                bbox_max_x = min(bbox_max_x, np.max(polygon_array[:, 0]))
-                bbox_min_y = max(bbox_min_y, np.min(polygon_array[:, 1]))
-                bbox_max_y = min(bbox_max_y, np.max(polygon_array[:, 1]))
-            except Exception as e:
-                print(f"Warning: Could not use visibility polygon bounding box: {e}")
-                visibility_polygon = None  # Fall back to circular constraint
-        
-        # Convert world coordinates to grid indices for spatial query
-        if hasattr(spatial_index, 'grid_to_node') and spatial_index.grid_to_node is not None:
-            # Calculate grid indices from world coordinates (reverse of map graph coordinate calculation)
-            cell_width = getattr(spatial_index, 'cell_width', 1.0)
-            cell_height = getattr(spatial_index, 'cell_height', 1.0)
-            
-            min_i = max(0, int((bbox_min_x / cell_width) - 0.5) - 1)  # Add small margin
-            max_i = min(spatial_index.grid_width - 1, int((bbox_max_x / cell_width) - 0.5) + 1)
-            min_j = max(0, int((bbox_min_y / cell_height) - 0.5) - 1)
-            max_j = min(spatial_index.grid_height - 1, int((bbox_max_y / cell_height) - 0.5) + 1)
-            
-            # Get candidate node indices using spatial index
-            candidate_node_indices = spatial_index.get_nodes_in_grid_region(min_i, min_j, max_i, max_j)
-            
-            if not candidate_node_indices:
-                return []
-            
-            # Get candidate node positions
-            map_graph = spatial_index.map_graph
-            candidate_nodes = [(idx, map_graph.nodes[idx]) for idx in candidate_node_indices]
-        else:
-            # Fallback to all nodes if spatial index not available
-            map_graph = spatial_index.map_graph
-            if not hasattr(map_graph, 'nodes') or not map_graph.nodes:
-                return []
-            candidate_nodes = [(i, pos) for i, pos in enumerate(map_graph.nodes)]
-        
-        if not candidate_nodes:
-            return []
-        
-        # Convert to numpy arrays for vectorized operations
-        node_indices = np.array([node_idx for node_idx, _ in candidate_nodes], dtype=np.int32)
-        nodes_array = np.array([pos for _, pos in candidate_nodes], dtype=np.float32)
-        
-        # Vectorized distance filtering (circular constraint within bounding box)
-        node_x = nodes_array[:, 0]
-        node_y = nodes_array[:, 1]
-        distances_sq = (node_x - agent_x)**2 + (node_y - agent_y)**2
-        visibility_mask = distances_sq <= (visibility_range**2)
-        
-        # If visibility polygon is provided, add polygon containment constraint
-        if visibility_polygon and len(visibility_polygon) >= 3:
-            try:
-                # Use vectorized point-in-polygon test for efficiency
-                polygon_mask = vectorized_point_in_polygon(node_x, node_y, visibility_polygon)
-                # Combine circular and polygon constraints
-                visibility_mask = visibility_mask & polygon_mask
-            except Exception as e:
-                print(f"Warning: Could not apply polygon constraint: {e}")
-                # Fall back to just circular constraint
-        
-        # Apply visibility filter
-        visible_indices = node_indices[visibility_mask]
-        visible_x = node_x[visibility_mask]
-        visible_y = node_y[visibility_mask]
-        
-        if len(visible_indices) == 0:
-            return []
-        
-        # Get the rotated reachability grid (this is still needed for the heatmap values)
-        rotated_grid = get_reachability_probabilities_for_fixed_grid(agent_x, agent_y, -agent_theta, mask_data)
-        
-        # Vectorized coordinate transformation
-        cell_size = mask_data['cell_size_px']
-        grid_size = mask_data['grid_size']
-        center_idx = grid_size // 2
-        
-        relative_x = visible_x - agent_x
-        relative_y = visible_y - agent_y
-        
-        grid_col = np.round(relative_x / cell_size + center_idx).astype(np.int32)
-        grid_row = np.round(center_idx - relative_y / cell_size).astype(np.int32)
-        
-        # Vectorized bounds checking
-        valid_mask = ((grid_row >= 0) & (grid_row < grid_size) & 
-                     (grid_col >= 0) & (grid_col < grid_size))
-        
-        # Apply bounds filter
-        final_indices = visible_indices[valid_mask]
-        final_x = visible_x[valid_mask]
-        final_y = visible_y[valid_mask]
-        final_rows = grid_row[valid_mask]
-        final_cols = grid_col[valid_mask]
-        
-        if len(final_indices) == 0:
-            return []
-        
-        # Vectorized heatmap value extraction
-        reachability_values = rotated_grid[final_rows, final_cols]
-        
-        # Filter out only exact zeros, preserve all non-zero values no matter how small
-        # Use a very small epsilon to handle floating-point precision issues
-        epsilon = np.finfo(reachability_values.dtype).eps * 10  # 10x machine epsilon
-        non_zero_mask = reachability_values > epsilon
-        
-        # Optional debug: Print statistics about filtered values (can be disabled for performance)
-        debug_filtering = False  # Set to True for debugging
-        if debug_filtering:
-            total_values = len(reachability_values)
-            zero_count = np.sum(reachability_values == 0.0)
-            very_small_count = np.sum((reachability_values > 0.0) & (reachability_values <= epsilon))
-            preserved_count = np.sum(non_zero_mask)
-            
-            if total_values > 0:
-                print(f"Heatmap filtering (optimized): {total_values} total values, {zero_count} exact zeros, "
-                      f"{very_small_count} very small (≤{epsilon:.2e}), {preserved_count} preserved")
-                if preserved_count > 0:
-                    min_preserved = np.min(reachability_values[non_zero_mask])
-                    max_preserved = np.max(reachability_values[non_zero_mask])
-                    print(f"  Value range: {min_preserved:.2e} to {max_preserved:.2e}")
-        
-        # Build final result
-        projected_nodes = []
-        if np.any(non_zero_mask):
-            result_indices = final_indices[non_zero_mask]
-            result_x = final_x[non_zero_mask]
-            result_y = final_y[non_zero_mask]
-            result_values = reachability_values[non_zero_mask]
-            
-            # Convert to expected format
-            for idx, x, y, val in zip(result_indices, result_x, result_y, result_values):
-                projected_nodes.append((int(idx), (float(x), float(y)), float(val)))
-        
-        return projected_nodes
-        
-    except Exception as e:
-        print(f"Error in optimized projected heatmap calculation: {e}")
-        # Fallback to the regular optimized version
-        return calculate_projected_heatmap_at_nodes(agent_x, agent_y, agent_theta, visibility_range, mask_data, spatial_index)
-
-
-def calculate_projected_heatmap_at_nodes(agent_x, agent_y, agent_theta, visibility_range, mask_data, spatial_index):
-    """
-    Calculate projected reachability heatmap values at map graph nodes within visibility range.
-    Optimized version using vectorized numpy operations for better performance.
-    
-    Args:
-        agent_x, agent_y: Agent position
-        agent_theta: Agent orientation in radians
-        visibility_range: Visibility range for filtering nodes
-        mask_data: Reachability mask data
-        spatial_index: Spatial index to get map graph nodes
-        
-    Returns:
-        List of (node_index, (x, y), reachability_value) tuples for nodes within visibility range
-    """
-    if mask_data is None or spatial_index is None:
-        return []
-    
-    try:
-        # Get all map graph nodes from spatial index
-        map_graph = spatial_index.map_graph
-        if not hasattr(map_graph, 'nodes') or not map_graph.nodes:
-            return []
-        
-        # Convert nodes to numpy arrays for vectorized operations
-        nodes_array = np.array(map_graph.nodes, dtype=np.float32)  # Shape: (N, 2)
-        node_x = nodes_array[:, 0]
-        node_y = nodes_array[:, 1]
-        
-        # Vectorized distance calculation to filter nodes within visibility range
-        distances_sq = (node_x - agent_x)**2 + (node_y - agent_y)**2
-        visible_mask = distances_sq <= (visibility_range**2)
-        
-        # Early exit if no nodes are visible
-        visible_indices = np.where(visible_mask)[0]
-        if len(visible_indices) == 0:
-            return []
-        
-        # Get visible nodes coordinates
-        visible_nodes_x = node_x[visible_mask]
-        visible_nodes_y = node_y[visible_mask]
-        
-        # Calculate relative positions from agent (vectorized)
-        relative_x = visible_nodes_x - agent_x
-        relative_y = visible_nodes_y - agent_y
-        
-        # Get the rotated reachability grid centered on the agent
-        # Use -agent_theta to match the coordinate system used by the M key overlay
-        rotated_grid = get_reachability_probabilities_for_fixed_grid(agent_x, agent_y, -agent_theta, mask_data)
-        
-        # Convert relative world coordinates to grid indices (vectorized)
-        cell_size = mask_data['cell_size_px']
-        grid_size = mask_data['grid_size']
-        center_idx = grid_size // 2
-        
-        # Vectorized coordinate transformation
-        grid_col = np.round(relative_x / cell_size + center_idx).astype(np.int32)
-        grid_row = np.round(center_idx - relative_y / cell_size).astype(np.int32)
-        
-        # Vectorized bounds checking
-        valid_grid_mask = ((grid_row >= 0) & (grid_row < grid_size) & 
-                          (grid_col >= 0) & (grid_col < grid_size))
-        
-        # Apply bounds mask to get final valid indices
-        final_valid_mask = valid_grid_mask
-        final_indices = visible_indices[final_valid_mask]
-        final_grid_rows = grid_row[final_valid_mask]
-        final_grid_cols = grid_col[final_valid_mask]
-        
-        # Extract reachability values using advanced indexing (vectorized)
-        reachability_values = rotated_grid[final_grid_rows, final_grid_cols]
-        
-        # Filter out only exact zeros, preserve all non-zero values no matter how small
-        # Use a very small epsilon to handle floating-point precision issues
-        epsilon = np.finfo(reachability_values.dtype).eps * 10  # 10x machine epsilon
-        non_zero_mask = reachability_values > epsilon
-        
-        # Optional debug: Print statistics about filtered values (can be disabled for performance)
-        debug_filtering = False  # Set to True for debugging
-        if debug_filtering:
-            total_values = len(reachability_values)
-            zero_count = np.sum(reachability_values == 0.0)
-            very_small_count = np.sum((reachability_values > 0.0) & (reachability_values <= epsilon))
-            preserved_count = np.sum(non_zero_mask)
-            
-            if total_values > 0:
-                print(f"Heatmap filtering: {total_values} total values, {zero_count} exact zeros, "
-                      f"{very_small_count} very small (≤{epsilon:.2e}), {preserved_count} preserved")
-                if preserved_count > 0:
-                    min_preserved = np.min(reachability_values[non_zero_mask])
-                    max_preserved = np.max(reachability_values[non_zero_mask])
-                    print(f"  Value range: {min_preserved:.2e} to {max_preserved:.2e}")
-        
-        # Build final result list
-        projected_nodes = []
-        if np.any(non_zero_mask):
-            final_node_indices = final_indices[non_zero_mask]
-            final_reachability = reachability_values[non_zero_mask]
-            
-            # Convert back to the expected format
-            for i, (node_idx, reachability_val) in enumerate(zip(final_node_indices, final_reachability)):
-                node_pos = map_graph.nodes[node_idx]
-                projected_nodes.append((int(node_idx), node_pos, float(reachability_val)))
-        
-        return projected_nodes
-        
-    except Exception as e:
-        print(f"Error calculating projected heatmap at nodes: {e}")
-        return []
-    
-    return projected_nodes
 
 def create_visibility_boundary_polygon(visibility_rays, agent_x, agent_y):
     """
@@ -911,8 +219,226 @@ def create_visibility_boundary_polygon(visibility_rays, agent_x, agent_y):
     return polygon_points
 
 
+def detect_and_link_overlapping_paths(polygon_exploration_paths, breakoff_lines):
+    """
+    Detect when exploration paths overlap and create links between breakpoints.
+    If one path contains another breakpoint, they are linked and only the shorter path is kept.
+    
+    Args:
+        polygon_exploration_paths: List of polygon path dictionaries
+        breakoff_lines: List of (start_point, end_point, gap_size, category) tuples
+        
+    Returns:
+        Tuple of (filtered_paths, path_links) where:
+        - filtered_paths: Original paths with overlapping ones filtered (shorter path kept)
+        - path_links: List of link dictionaries showing connections between breakpoints
+    """
+    if not polygon_exploration_paths or not breakoff_lines:
+        return polygon_exploration_paths, []
+    
+    # Create a mapping from breakoff lines to their exploration paths
+    path_to_breakoff = {}
+    breakoff_positions = {}
+    
+    for i, path_data in enumerate(polygon_exploration_paths):
+        breakoff_line = path_data.get('breakoff_line')
+        if breakoff_line:
+            path_to_breakoff[i] = breakoff_line
+            # Store breakpoint positions (midpoint of breakoff line)
+            start_point, end_point = breakoff_line[0], breakoff_line[1]
+            midpoint = ((start_point[0] + end_point[0]) / 2, (start_point[1] + end_point[1]) / 2)
+            breakoff_positions[i] = midpoint
+    
+    # Find overlapping paths - both paths must contain each other's breakpoints
+    overlapping_groups = []
+    path_links = []
+    processed_paths = set()
+    
+    for i, path_data_i in enumerate(polygon_exploration_paths):
+        if i in processed_paths:
+            continue
+            
+        path_points_i = path_data_i.get('path_points', [])
+        if len(path_points_i) < 3:  # Need at least 3 points for polygon
+            continue
+            
+        overlapping_group = [i]
+        
+        # Check for mutual containment with other paths
+        for j, path_data_j in enumerate(polygon_exploration_paths):
+            if i == j or j in processed_paths:
+                continue
+                
+            path_points_j = path_data_j.get('path_points', [])
+            if len(path_points_j) < 3:  # Need at least 3 points for polygon
+                continue
+            
+            if i in breakoff_positions and j in breakoff_positions:
+                breakpoint_i = breakoff_positions[i]
+                breakpoint_j = breakoff_positions[j]
+                
+                # Check for mutual containment: both breakpoints must be inside the other's path
+                i_contains_j = point_in_polygon(breakpoint_j, path_points_i)
+                j_contains_i = point_in_polygon(breakpoint_i, path_points_j)
+                
+                # Both paths must contain each other's breakpoints to be linked
+                if i_contains_j and j_contains_i:
+                    overlapping_group.append(j)
+                    
+                    # Create bidirectional link between breakpoints
+                    path_links.append({
+                        'from_breakpoint': breakpoint_i,
+                        'to_breakpoint': breakpoint_j,
+                        'from_path_index': i,
+                        'to_path_index': j,
+                        'link_type': 'mutual_containment'
+                    })
+        
+        # If we found overlapping paths, determine which one to keep (shortest path)
+        if len(overlapping_group) > 1:
+            overlapping_groups.append(overlapping_group)
+            
+            # Find the shortest path in the group based on path length
+            shortest_path_index = min(overlapping_group, 
+                                    key=lambda idx: len(polygon_exploration_paths[idx].get('path_points', [])))
+            
+            # Mark all but the shortest as processed (will be filtered out)
+            for path_idx in overlapping_group:
+                if path_idx != shortest_path_index:
+                    processed_paths.add(path_idx)
+        
+        # Mark the current path as processed
+        processed_paths.add(i)
+    
+    # Create filtered list keeping only non-overlapping paths and shortest from each overlapping group
+    filtered_paths = []
+    for i, path_data in enumerate(polygon_exploration_paths):
+        # Keep path if it wasn't filtered out due to overlap
+        should_keep = True
+        for group in overlapping_groups:
+            if i in group:
+                # Only keep if this is the shortest path in the group
+                shortest_in_group = min(group, 
+                                      key=lambda idx: len(polygon_exploration_paths[idx].get('path_points', [])))
+                if i != shortest_in_group:
+                    should_keep = False
+                    break
+        
+        if should_keep:
+            # Add metadata about which paths this one represents
+            path_copy = path_data.copy()
+            represented_paths = []
+            for group in overlapping_groups:
+                if i in group:
+                    represented_paths = group
+                    break
+            if represented_paths:
+                path_copy['represented_paths'] = represented_paths
+                path_copy['is_merged_path'] = True
+            else:
+                path_copy['represented_paths'] = [i]
+                path_copy['is_merged_path'] = False
+                
+            filtered_paths.append(path_copy)
+    
+    return filtered_paths, path_links
+
+
+def point_in_polygon(point, polygon_points):
+    """
+    Determine if a point is inside a polygon using the ray casting algorithm.
+    
+    Args:
+        point: (x, y) tuple of the point to test
+        polygon_points: List of (x, y) tuples forming the polygon vertices
+        
+    Returns:
+        True if point is inside polygon, False otherwise
+    """
+    if len(polygon_points) < 3:
+        return False
+    
+    x, y = point
+    n = len(polygon_points)
+    inside = False
+    
+    p1x, p1y = polygon_points[0]
+    for i in range(1, n + 1):
+        p2x, p2y = polygon_points[i % n]
+        
+        if y > min(p1y, p2y):
+            if y <= max(p1y, p2y):
+                if x <= max(p1x, p2x):
+                    if p1y != p2y:
+                        xinters = (y - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
+                    if p1x == p2x or x <= xinters:
+                        inside = not inside
+        p1x, p1y = p2x, p2y
+    
+    return inside
+
+
+def calculate_highlighted_map_nodes(spatial_index, agent_x, agent_y, visibility_range, visibility_bounding_box):
+    """
+    Calculate which map graph nodes should be highlighted based on visibility circle and bounding box.
+    Uses spatial index for efficient O(1) lookups instead of iterating through all nodes.
+    
+    Args:
+        spatial_index: SpatialIndex instance for fast spatial queries
+        agent_x, agent_y: Agent position
+        visibility_range: Visibility radius
+        visibility_bounding_box: (min_x, min_y, max_x, max_y) bounding box
+        
+    Returns:
+        Dictionary with categorized nodes:
+        {
+            'circle_nodes': [(node_index, node_x, node_y), ...],  # Nodes in visibility circle
+            'bbox_nodes': [(node_index, node_x, node_y), ...]    # Nodes only in bounding box
+        }
+    """
+    if spatial_index is None or visibility_bounding_box is None:
+        return {'circle_nodes': [], 'bbox_nodes': []}
+    
+    # Get all nodes within the bounding box using spatial index
+    min_x, min_y, max_x, max_y = visibility_bounding_box
+    
+    # Convert world coordinates to grid indices for efficient querying
+    min_i, min_j = spatial_index.coordinates_to_grid_indices(min_x, min_y)
+    max_i, max_j = spatial_index.coordinates_to_grid_indices(max_x, max_y)
+    
+    # Get all nodes in the bounding box region using O(1) grid access
+    bbox_node_indices = spatial_index.get_nodes_in_grid_region(min_i, min_j, max_i, max_j)
+    
+    # Categorize nodes: circle vs bbox-only
+    circle_nodes = []
+    bbox_only_nodes = []
+    visibility_radius_sq = visibility_range ** 2
+    
+    # Get node positions for the nodes in the bbox
+    if hasattr(spatial_index, 'node_positions') and spatial_index.node_positions is not None:
+        for node_idx in bbox_node_indices:
+            if 0 <= node_idx < len(spatial_index.node_positions):
+                node_x, node_y = spatial_index.node_positions[node_idx]
+                
+                # Check if node is within visibility circle
+                dx = node_x - agent_x
+                dy = node_y - agent_y
+                distance_sq = dx * dx + dy * dy
+                
+                if distance_sq <= visibility_radius_sq:
+                    circle_nodes.append((node_idx, node_x, node_y))
+                else:
+                    # Node is in bounding box but not in circle
+                    bbox_only_nodes.append((node_idx, node_x, node_y))
+    
+    return {
+        'circle_nodes': circle_nodes,
+        'bbox_nodes': bbox_only_nodes
+    }
+
+
 def calculate_evader_analysis(agent_x, agent_y, agent_theta, visibility_range, walls, 
-                            mask_data=None, num_rays=100, num_sectors=8, min_gap_distance=30, spatial_index=None, save_lines_to_file=None):
+                            mask_data=None, num_rays=100, num_sectors=8, min_gap_distance=30, spatial_index=None, save_lines_to_file=None, overlay_api=None):
     """
     Unified API that calculates all evader analysis data and returns it as a single object.
     
@@ -927,6 +453,7 @@ def calculate_evader_analysis(agent_x, agent_y, agent_theta, visibility_range, w
         min_gap_distance: Minimum distance for breakoff point detection (default 30)
         spatial_index: Spatial index for fast spatial queries (optional)
         save_lines_to_file: If provided, save all lines from clipped environment to this filename (optional)
+        overlay_api: ReachabilityMaskAPI instance for overlay processing (optional)
         
     Returns:
         EvaderAnalysis object with all computed data as attributes
@@ -941,6 +468,7 @@ def calculate_evader_analysis(agent_x, agent_y, agent_theta, visibility_range, w
     analysis.visibility_range = visibility_range
     analysis.analysis_timestamp = time.time()
     analysis.spatial_index = spatial_index  # Store spatial index for use within analysis
+    analysis.overlay_api = overlay_api  # Store overlay API for reachability processing
     
     # Clip environment to visibility range for performance optimization
     analysis.clipped_walls, analysis.clipped_doors, analysis.visibility_bounding_box, analysis.clipping_statistics = \
@@ -954,6 +482,11 @@ def calculate_evader_analysis(agent_x, agent_y, agent_theta, visibility_range, w
         analysis.reachability_at_position = get_reachability_at_position(
             agent_x, agent_y, agent_theta, mask_data
         )
+        
+        # Create clipped version of reachability heatmap within visibility circle (one-time operation)
+        analysis.clipped_reachability_grid = create_clipped_reachability_grid(
+            agent_x, agent_y, agent_theta, visibility_range, mask_data
+        )
     
     # Calculate visibility analysis using clipped environment for better performance
     analysis.visibility_rays = calculate_evader_visibility(
@@ -964,14 +497,6 @@ def calculate_evader_analysis(agent_x, agent_y, agent_theta, visibility_range, w
     analysis.visibility_boundary_polygon = create_visibility_boundary_polygon(
         analysis.visibility_rays, agent_x, agent_y
     )
-    
-    # Calculate projected heatmap values at map graph nodes within visibility range
-    # Use optimized bounding box version with polygon constraint for better performance
-    if mask_data is not None:
-        analysis.projected_heatmap_nodes = calculate_projected_heatmap_at_nodes_optimized_bounding_box(
-            agent_x, agent_y, agent_theta, visibility_range, mask_data, spatial_index, 
-            visibility_polygon=analysis.visibility_boundary_polygon
-        )
     
     # Calculate visibility statistics
     analysis.visibility_statistics = get_visibility_statistics(analysis.visibility_rays)
@@ -1054,6 +579,41 @@ def calculate_evader_analysis(agent_x, agent_y, agent_theta, visibility_range, w
         analysis.breakoff_lines, agent_x, agent_y, visibility_range, clipped_environment_lines
     )
     
+    # Detect overlapping paths and create links between breakpoints
+    analysis.polygon_exploration_paths, analysis.path_links = detect_and_link_overlapping_paths(
+        analysis.polygon_exploration_paths, analysis.breakoff_lines
+    )
+    
+    # Process paths with reachability overlay if API is available
+    if overlay_api is not None and analysis.polygon_exploration_paths:
+        try:
+            # Use the overlay API to process paths with reachability data
+            path_analysis_data, reachability_data, sample_points_data = overlay_api.process_paths_with_reachability(
+                paths=analysis.polygon_exploration_paths,
+                agent_x=agent_x,
+                agent_y=agent_y,
+                agent_orientation=agent_theta,
+                visibility_range=visibility_range,
+                visibility_polygon=analysis.visibility_boundary_polygon
+            )
+            
+            # Store the results in the analysis object
+            analysis.path_analysis_data = path_analysis_data
+            analysis.reachability_overlay_data = reachability_data
+            analysis.sample_points_data = sample_points_data
+            
+        except Exception as e:
+            print(f"⚠️ Could not process paths with reachability overlay: {e}")
+            # Set fallback values
+            analysis.path_analysis_data = []
+            analysis.reachability_overlay_data = None
+            analysis.sample_points_data = []
+    else:
+        # No overlay API available
+        analysis.path_analysis_data = []
+        analysis.reachability_overlay_data = None
+        analysis.sample_points_data = []
+    
     # Add ray walls and breakoff walls to the clipped walls so they're part of the environment data
     all_new_walls = []
     if ray_walls:
@@ -1073,7 +633,74 @@ def calculate_evader_analysis(agent_x, agent_y, agent_theta, visibility_range, w
     if save_lines_to_file:
         save_clipped_environment_to_file(analysis, save_lines_to_file)
     
+    # Calculate highlighted map graph nodes using spatial index for efficiency
+    if spatial_index is not None and analysis.visibility_bounding_box is not None:
+        analysis.highlighted_nodes = calculate_highlighted_map_nodes(
+            spatial_index, 
+            agent_x, agent_y, 
+            visibility_range, 
+            analysis.visibility_bounding_box
+        )
+    
     return analysis
+
+def create_clipped_reachability_grid(agent_x, agent_y, agent_theta, visibility_range, mask_data):
+    """
+    Create a clipped reachability grid using bounding box clipping for maximum speed.
+    Clips the full reachability grid to a square bounding box around the visibility circle.
+    
+    Args:
+        agent_x, agent_y: Agent position (center of visibility area)
+        agent_theta: Agent orientation in radians
+        visibility_range: Radius of the visibility circle (used for bounding box size)
+        mask_data: Full reachability mask data
+        
+    Returns:
+        Dictionary with clipped grid data and metadata, or None if not available
+    """
+    if mask_data is None:
+        return None
+    
+    # Get the full reachability grid for current agent pose
+    full_grid = get_reachability_probabilities_for_fixed_grid(agent_x, agent_y, agent_theta, mask_data)
+    
+    if full_grid is None:
+        return None
+    
+    grid_size = mask_data.get('grid_size', 0)
+    cell_size = mask_data.get('cell_size_px', 1)
+    
+    if grid_size == 0:
+        return None
+    
+    # Calculate bounding box for clipping (square around the visibility circle)
+    center_grid_x = grid_size // 2
+    center_grid_y = grid_size // 2
+    
+    # Convert visibility range to grid cells
+    visibility_cells = int(visibility_range / cell_size)
+    
+    # Calculate bounding box indices (clamp to grid boundaries)
+    min_i = max(0, center_grid_x - visibility_cells)
+    max_i = min(grid_size, center_grid_x + visibility_cells + 1)
+    min_j = max(0, center_grid_y - visibility_cells)
+    max_j = min(grid_size, center_grid_y + visibility_cells + 1)
+    
+    # Fast numpy slicing to extract the bounding box
+    clipped_grid = full_grid[min_i:max_i, min_j:max_j].copy()
+    
+    # Create result structure compatible with drawing functions
+    result = {
+        'grid_size': grid_size,  # Original grid size for coordinate mapping
+        'cell_size_px': cell_size,
+        'grid_data': clipped_grid,
+        'world_extent_px': mask_data.get('world_extent_px', grid_size * cell_size),
+        'visibility_range': visibility_range,
+        'clipped_bounds': (min_i, min_j, max_i, max_j),  # Bounds of the clipped region
+        'clipped_size': clipped_grid.shape  # Size of the clipped grid
+    }
+    
+    return result
 
 def convert_visibility_rays_to_walls(visibility_rays, agent_x, agent_y):
     """
@@ -1218,12 +845,30 @@ def create_ray_connecting_walls(visibility_rays, breakoff_lines, agent_x, agent_
             
             # Only add if distance is reasonable (avoid noise from very close points)
             if distance > 5.0:  # Minimum distance threshold
-                connecting_walls.append({
-                    'start': current_endpoint,
-                    'end': next_endpoint,
-                    'type': 'ray_connecting_line',
-                    'distance': distance
-                })
+                # Check angle between the rays to ensure we don't connect walls on opposite sides
+                current_angle = visibility_rays[current_ray_idx][0]  # angle field
+                next_angle = visibility_rays[next_ray_idx][0]
+                
+                # Calculate the clockwise angular difference from current to next ray
+                # This measures the angle going clockwise from current_angle to next_angle
+                clockwise_angle_diff = next_angle - current_angle
+                
+                # Normalize to [0, 2π) range for clockwise measurement
+                while clockwise_angle_diff < 0:
+                    clockwise_angle_diff += 2 * math.pi
+                while clockwise_angle_diff >= 2 * math.pi:
+                    clockwise_angle_diff -= 2 * math.pi
+                
+                # Only connect if the clockwise angular difference is less than 180 degrees (π radians)
+                # This ensures we're connecting rays that are consecutive in clockwise order
+                if clockwise_angle_diff < math.pi:
+                    connecting_walls.append({
+                        'start': current_endpoint,
+                        'end': next_endpoint,
+                        'type': 'ray_connecting_line',
+                        'distance': distance,
+                        'clockwise_angle_diff': clockwise_angle_diff  # Store for debugging/analysis
+                    })
     
     return connecting_walls
 
@@ -1240,8 +885,6 @@ def create_visibility_circle_walls(agent_x, agent_y, visibility_range, wall_thic
     Returns:
         List of pygame.Rect objects representing walls along the circle perimeter
     """
-    import pygame
-    import math
     
     circle_walls = []
     
@@ -1726,3 +1369,165 @@ def load_lines_from_file(filename="clipped_environment_lines.txt"):
     except Exception as e:
         print(f"Error loading lines from file: {e}")
         return {'lines': [], 'circles': []}
+
+def save_visibility_polygon_to_file(analysis, filename="visibility_polygon.txt"):
+    """
+    Save the visibility polygon (connecting ray endpoints) along with agent state to a text file.
+    
+    Args:
+        analysis: EvaderAnalysis object containing visibility data
+        filename: Output filename (default: "visibility_polygon.txt")
+    """
+    if not analysis:
+        print("Error: No analysis data available")
+        return
+    
+    try:
+        with open(filename, 'w') as f:
+            f.write("# Visibility Polygon Data\n")
+            f.write(f"# Generated at: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            
+            # Write agent state information
+            if hasattr(analysis, 'agent_position') and analysis.agent_position:
+                f.write("# AGENT_STATE\n")
+                f.write(f"AGENT_POSITION {analysis.agent_position[0]:.6f} {analysis.agent_position[1]:.6f}\n")
+                if hasattr(analysis, 'agent_orientation') and analysis.agent_orientation is not None:
+                    f.write(f"AGENT_ORIENTATION {analysis.agent_orientation:.6f}\n")
+                f.write(f"VISIBILITY_RANGE {analysis.visibility_range:.2f}\n\n")
+            
+            # Write visibility polygon if available
+            if hasattr(analysis, 'visibility_boundary_polygon') and analysis.visibility_boundary_polygon:
+                polygon = analysis.visibility_boundary_polygon
+                f.write("# VISIBILITY_POLYGON\n")
+                f.write(f"# Number of vertices: {len(polygon)}\n")
+                f.write("# Format: VERTEX x y\n")
+                
+                for i, (x, y) in enumerate(polygon):
+                    f.write(f"VERTEX {x:.6f} {y:.6f}\n")
+                
+                f.write(f"\n# POLYGON_SUMMARY\n")
+                f.write(f"# Total vertices: {len(polygon)}\n")
+                
+                # Calculate polygon area using shoelace formula
+                if len(polygon) >= 3:
+                    area = 0.0
+                    n = len(polygon)
+                    for i in range(n):
+                        j = (i + 1) % n
+                        area += polygon[i][0] * polygon[j][1]
+                        area -= polygon[j][0] * polygon[i][1]
+                    area = abs(area) / 2.0
+                    f.write(f"# Polygon area: {area:.2f} square pixels\n")
+                
+                # Calculate polygon perimeter
+                if len(polygon) >= 2:
+                    perimeter = 0.0
+                    n = len(polygon)
+                    for i in range(n):
+                        j = (i + 1) % n
+                        dx = polygon[j][0] - polygon[i][0]
+                        dy = polygon[j][1] - polygon[i][1]
+                        perimeter += math.sqrt(dx*dx + dy*dy)
+                    f.write(f"# Polygon perimeter: {perimeter:.2f} pixels\n")
+            else:
+                f.write("# VISIBILITY_POLYGON\n")
+                f.write("# No visibility polygon available\n")
+            
+            # Write visibility rays data if available
+            if hasattr(analysis, 'visibility_rays') and analysis.visibility_rays:
+                rays = analysis.visibility_rays
+                f.write(f"\n# VISIBILITY_RAYS\n")
+                f.write(f"# Number of rays: {len(rays)}\n")
+                f.write("# Format: RAY angle endpoint_x endpoint_y distance blocked\n")
+                
+                for angle, endpoint, distance, blocked in rays:
+                    blocked_str = "true" if blocked else "false"
+                    if endpoint and len(endpoint) >= 2:
+                        f.write(f"RAY {angle:.6f} {endpoint[0]:.6f} {endpoint[1]:.6f} {distance:.6f} {blocked_str}\n")
+                
+                # Calculate ray statistics
+                blocked_count = sum(1 for _, _, _, blocked in rays if blocked)
+                clear_count = len(rays) - blocked_count
+                f.write(f"\n# RAY_SUMMARY\n")
+                f.write(f"# Total rays: {len(rays)}\n")
+                f.write(f"# Clear rays: {clear_count}\n")
+                f.write(f"# Blocked rays: {blocked_count}\n")
+                f.write(f"# Visibility ratio: {clear_count/len(rays)*100:.1f}%\n")
+        
+        # Print success message with breakdown
+        polygon_vertices = 0
+        ray_count = 0
+        if hasattr(analysis, 'visibility_boundary_polygon') and analysis.visibility_boundary_polygon:
+            polygon_vertices = len(analysis.visibility_boundary_polygon)
+        if hasattr(analysis, 'visibility_rays') and analysis.visibility_rays:
+            ray_count = len(analysis.visibility_rays)
+        
+        print(f"Successfully saved visibility polygon to {filename}")
+        print(f"  Agent position: ({analysis.agent_position[0]:.1f}, {analysis.agent_position[1]:.1f})")
+        if hasattr(analysis, 'agent_orientation') and analysis.agent_orientation is not None:
+            print(f"  Agent orientation: {math.degrees(analysis.agent_orientation):.1f}°")
+        print(f"  Visibility range: {analysis.visibility_range:.0f} pixels")
+        print(f"  Polygon vertices: {polygon_vertices}")
+        print(f"  Visibility rays: {ray_count}")
+        
+    except Exception as e:
+        print(f"Error saving visibility polygon to file: {e}")
+
+
+def load_visibility_polygon_from_file(filename="visibility_polygon.txt"):
+    """
+    Load visibility polygon and agent state from a text file.
+    
+    Args:
+        filename: Input filename (default: "visibility_polygon.txt")
+        
+    Returns:
+        Dictionary with 'agent_position', 'agent_orientation', 'visibility_range', 
+        'polygon', and 'rays' data
+    """
+    data = {
+        'agent_position': None,
+        'agent_orientation': None,
+        'visibility_range': None,
+        'polygon': [],
+        'rays': []
+    }
+    
+    try:
+        with open(filename, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('#') or not line:
+                    continue
+                
+                parts = line.split()
+                if not parts:
+                    continue
+                
+                if parts[0] == 'AGENT_POSITION' and len(parts) >= 3:
+                    data['agent_position'] = (float(parts[1]), float(parts[2]))
+                elif parts[0] == 'AGENT_ORIENTATION' and len(parts) >= 2:
+                    data['agent_orientation'] = float(parts[1])
+                elif parts[0] == 'VISIBILITY_RANGE' and len(parts) >= 2:
+                    data['visibility_range'] = float(parts[1])
+                elif parts[0] == 'VERTEX' and len(parts) >= 3:
+                    data['polygon'].append((float(parts[1]), float(parts[2])))
+                elif parts[0] == 'RAY' and len(parts) >= 6:
+                    angle = float(parts[1])
+                    endpoint = (float(parts[2]), float(parts[3]))
+                    distance = float(parts[4])
+                    blocked = parts[5].lower() == 'true'
+                    data['rays'].append((angle, endpoint, distance, blocked))
+        
+        print(f"Successfully loaded visibility polygon from {filename}")
+        print(f"  Agent position: {data['agent_position']}")
+        print(f"  Agent orientation: {data['agent_orientation']}")
+        print(f"  Visibility range: {data['visibility_range']}")
+        print(f"  Polygon vertices: {len(data['polygon'])}")
+        print(f"  Visibility rays: {len(data['rays'])}")
+        
+        return data
+        
+    except Exception as e:
+        print(f"Error loading visibility polygon from file: {e}")
+        return data

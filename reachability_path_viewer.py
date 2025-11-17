@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Force matplotlib window to show up.
+Reachability Path Viewer - Visualize intersection graphs and polygon exploration paths.
 """
 
 import os
+import time
 import matplotlib
 matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
@@ -11,6 +12,274 @@ import matplotlib.patches as patches
 import math
 import polygon_exploration as pe
 import polygon_exploration_cpp as pec
+
+
+class RulerTool:
+    """Interactive ruler tool for measuring distances by clicking and dragging."""
+    
+    def __init__(self, ax):
+        self.ax = ax
+        self.start_point = None
+        self.end_point = None
+        self.ruler_line = None
+        self.ruler_text = None
+        self.start_marker = None
+        self.end_marker = None
+        self.is_measuring = False
+        
+        # Connect mouse events
+        self.press_cid = ax.figure.canvas.mpl_connect('button_press_event', self.on_press)
+        self.motion_cid = ax.figure.canvas.mpl_connect('motion_notify_event', self.on_motion)
+        self.release_cid = ax.figure.canvas.mpl_connect('button_release_event', self.on_release)
+        self.key_cid = ax.figure.canvas.mpl_connect('key_press_event', self.on_key)
+        
+        print("🔧 Ruler tool activated:")
+        print("   • Left-click and drag to measure distance")
+        print("   • Press 'r' to clear ruler")
+        print("   • Press 'h' to show/hide help")
+    
+    def on_press(self, event):
+        """Handle mouse press - start measuring."""
+        if event.inaxes != self.ax or event.button != 1:  # Only left mouse button
+            return
+        
+        # Clear previous ruler
+        self.clear_ruler()
+        
+        self.start_point = (event.xdata, event.ydata)
+        self.is_measuring = True
+    
+    def on_motion(self, event):
+        """Handle mouse motion - update ruler line."""
+        if not self.is_measuring or event.inaxes != self.ax:
+            return
+        
+        if self.start_point is None:
+            return
+        
+        self.end_point = (event.xdata, event.ydata)
+        self.update_ruler()
+    
+    def on_release(self, event):
+        """Handle mouse release - finish measuring."""
+        if not self.is_measuring or event.inaxes != self.ax:
+            return
+        
+        if self.start_point is None:
+            return
+        
+        self.end_point = (event.xdata, event.ydata)
+        self.is_measuring = False
+        self.update_ruler()
+        
+        # Calculate and display distance
+        distance = self.calculate_distance()
+        print(f"📏 Measured distance: {distance:.2f} units")
+    
+    def on_key(self, event):
+        """Handle key press events."""
+        if event.key == 'r':
+            self.clear_ruler()
+            print("🔧 Ruler cleared")
+        elif event.key == 'h':
+            self.show_help()
+    
+    def calculate_distance(self):
+        """Calculate distance between start and end points."""
+        if self.start_point is None or self.end_point is None:
+            return 0.0
+        
+        dx = self.end_point[0] - self.start_point[0]
+        dy = self.end_point[1] - self.start_point[1]
+        return math.sqrt(dx*dx + dy*dy)
+    
+    def update_ruler(self):
+        """Update the visual ruler line and text."""
+        if self.start_point is None or self.end_point is None:
+            return
+        
+        # Remove old ruler elements
+        if self.ruler_line is not None:
+            self.ruler_line.remove()
+        if self.ruler_text is not None:
+            self.ruler_text.remove()
+        if self.start_marker is not None:
+            self.start_marker.remove()
+        if self.end_marker is not None:
+            self.end_marker.remove()
+        
+        # Draw new ruler line
+        self.ruler_line, = self.ax.plot(
+            [self.start_point[0], self.end_point[0]], 
+            [self.start_point[1], self.end_point[1]], 
+            'r-', linewidth=3, alpha=0.8, zorder=100
+        )
+        
+        # Add distance text at midpoint
+        mid_x = (self.start_point[0] + self.end_point[0]) / 2
+        mid_y = (self.start_point[1] + self.end_point[1]) / 2
+        distance = self.calculate_distance()
+        
+        self.ruler_text = self.ax.text(
+            mid_x, mid_y, f'{distance:.1f}', 
+            fontsize=12, fontweight='bold', 
+            bbox=dict(boxstyle='round,pad=0.3', facecolor='yellow', alpha=0.8),
+            ha='center', va='center', zorder=101
+        )
+        
+        # Draw start and end markers (store references for removal)
+        self.start_marker, = self.ax.plot(self.start_point[0], self.start_point[1], 'ro', 
+                                         markersize=8, zorder=102, alpha=0.8)
+        self.end_marker, = self.ax.plot(self.end_point[0], self.end_point[1], 'ro', 
+                                       markersize=8, zorder=102, alpha=0.8)
+        
+        self.ax.figure.canvas.draw()
+    
+    def clear_ruler(self):
+        """Clear the ruler from the plot."""
+        if self.ruler_line is not None:
+            self.ruler_line.remove()
+            self.ruler_line = None
+        if self.ruler_text is not None:
+            self.ruler_text.remove()
+            self.ruler_text = None
+        if self.start_marker is not None:
+            self.start_marker.remove()
+            self.start_marker = None
+        if self.end_marker is not None:
+            self.end_marker.remove()
+            self.end_marker = None
+        
+        self.start_point = None
+        self.end_point = None
+        self.is_measuring = False
+        self.ax.figure.canvas.draw()
+    
+    def show_help(self):
+        """Show help information."""
+        print("\n🔧 Ruler Tool Help:")
+        print("   • Left-click and drag to measure distance")
+        print("   • Distance appears as yellow text box")
+        print("   • Press 'r' to clear current ruler")
+        print("   • Press 'h' to show this help")
+        print("   • Each measurement is logged to console\n")
+    
+    def disconnect(self):
+        """Disconnect all event handlers."""
+        self.ax.figure.canvas.mpl_disconnect(self.press_cid)
+        self.ax.figure.canvas.mpl_disconnect(self.motion_cid)
+        self.ax.figure.canvas.mpl_disconnect(self.release_cid)
+        self.ax.figure.canvas.mpl_disconnect(self.key_cid)
+
+
+def load_environment_data(env_filename='test_env2.txt', vis_filename='vis_test2.txt'):
+    """Load environment lines, breakoff lines, and agent data from files."""
+    environment_lines = []
+    breakoff_lines = []
+    visibility_polygon = []
+    
+    # Default values (fallback if vis file is not found)
+    agent_x, agent_y = 403.8, 468.1
+    agent_orientation = 0.0
+    visibility_range = 200.0
+    
+    # Load environment lines and breakoff lines
+    try:
+        with open(env_filename, 'r') as f:
+            reading_breakoff = False
+            for line in f:
+                line = line.strip()
+                if line.startswith('# BREAKOFF_WALLS'):
+                    reading_breakoff = True
+                    continue
+                elif line.startswith('#') and reading_breakoff:
+                    reading_breakoff = False
+                    continue
+                elif line.startswith('LINE'):
+                    parts = line.split()
+                    if len(parts) >= 5:
+                        x1, y1 = float(parts[1]), float(parts[2])
+                        x2, y2 = float(parts[3]), float(parts[4])
+                        
+                        # Add ALL lines to environment_lines (including breakoff lines)
+                        environment_lines.append([(x1, y1), (x2, y2)])
+                        
+                        if reading_breakoff:
+                            # This is a breakoff line - also store it for path generation
+                            start_point = (x1, y1)
+                            end_point = (x2, y2)
+                            gap_size = math.sqrt((x2-x1)**2 + (y2-y1)**2)  # Calculate line length as gap size
+                            
+                            # Determine category based on distance from agent
+                            dist_start = math.sqrt((x1 - agent_x)**2 + (y1 - agent_y)**2)
+                            dist_end = math.sqrt((x2 - agent_x)**2 + (y2 - agent_y)**2)
+                            
+                            if dist_start < dist_end:
+                                category = "near_far_transition"
+                            else:
+                                category = "far_near_transition"
+                            
+                            breakoff_lines.append((start_point, end_point, gap_size, category))
+        
+        print(f"✅ Environment: Loaded {len(environment_lines)} lines and {len(breakoff_lines)} breakoff lines from {env_filename}")
+    
+    except Exception as e:
+        print(f"❌ Failed to load environment from {env_filename}: {e}")
+        raise
+    
+    # Load agent data and visibility polygon
+    try:
+        with open(vis_filename, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('AGENT_POSITION'):
+                    parts = line.split()
+                    if len(parts) >= 3:
+                        agent_x, agent_y = float(parts[1]), float(parts[2])
+                        print(f"✅ Agent position: ({agent_x:.3f}, {agent_y:.3f})")
+                
+                elif line.startswith('AGENT_ORIENTATION'):
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        agent_orientation = float(parts[1])
+                        print(f"✅ Agent orientation: {agent_orientation:.3f} radians ({math.degrees(agent_orientation):.1f}°)")
+                
+                elif line.startswith('VISIBILITY_RANGE'):
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        visibility_range = float(parts[1])
+                        print(f"✅ Visibility range: {visibility_range:.1f} units")
+                
+                elif line.startswith('VERTEX'):
+                    parts = line.split()
+                    if len(parts) >= 3:
+                        x, y = float(parts[1]), float(parts[2])
+                        visibility_polygon.append((x, y))
+        
+        print(f"✅ Visibility: Loaded {len(visibility_polygon)} polygon vertices from {vis_filename}")
+        
+        # Now that we have the actual agent position, recalculate breakoff line categories
+        if breakoff_lines:
+            updated_breakoff_lines = []
+            for start_point, end_point, gap_size, _ in breakoff_lines:
+                # Recalculate category with correct agent position
+                dist_start = math.sqrt((start_point[0] - agent_x)**2 + (start_point[1] - agent_y)**2)
+                dist_end = math.sqrt((end_point[0] - agent_x)**2 + (end_point[1] - agent_y)**2)
+                
+                if dist_start < dist_end:
+                    category = "near_far_transition"
+                else:
+                    category = "far_near_transition"
+                
+                updated_breakoff_lines.append((start_point, end_point, gap_size, category))
+            breakoff_lines = updated_breakoff_lines
+            print(f"✅ Updated breakoff line categories with correct agent position")
+    
+    except Exception as e:
+        print(f"⚠️  Could not load visibility data from {vis_filename}: {e}")
+        print(f"   Using default agent values: pos=({agent_x:.1f}, {agent_y:.1f}), range={visibility_range:.1f}")
+    
+    return environment_lines, breakoff_lines, agent_x, agent_y, visibility_range, agent_orientation, visibility_polygon
 
 def show_intersection_graph(environment_lines, agent_x, agent_y, visibility_range, show_environment=True):
     """Show the intersection graph in a separate window.
@@ -452,54 +721,20 @@ def show_intersection_graph(environment_lines, agent_x, agent_y, visibility_rang
 def show_visualization():
     """Show the visualization in a window that definitely appears."""
     
-    # Load data
-    environment_lines = []
-    breakoff_lines = []
-    agent_x, agent_y = 403.8, 468.1
-    visibility_range = 200.0
-    
-    with open('test_env2.txt', 'r') as f:
-        reading_breakoff = False
-        for line in f:
-            line = line.strip()
-            if line.startswith('# BREAKOFF_WALLS'):
-                reading_breakoff = True
-                continue
-            elif line.startswith('#') and reading_breakoff:
-                reading_breakoff = False
-                continue
-            elif line.startswith('LINE'):
-                parts = line.split()
-                if len(parts) >= 5:
-                    x1, y1 = float(parts[1]), float(parts[2])
-                    x2, y2 = float(parts[3]), float(parts[4])
-                    
-                    # Add ALL lines to environment_lines (including breakoff lines)
-                    environment_lines.append([(x1, y1), (x2, y2)])
-                    
-                    if reading_breakoff:
-                        # This is a breakoff line - also store it for path generation
-                        start_point = (x1, y1)
-                        end_point = (x2, y2)
-                        gap_size = math.sqrt((x2-x1)**2 + (y2-y1)**2)  # Calculate line length as gap size
-                        
-                        # Determine category based on distance from agent
-                        dist_start = math.sqrt((x1 - agent_x)**2 + (y1 - agent_y)**2)
-                        dist_end = math.sqrt((x2 - agent_x)**2 + (y2 - agent_y)**2)
-                        
-                        if dist_start < dist_end:
-                            category = "near_far_transition"
-                        else:
-                            category = "far_near_transition"
-                        
-                        breakoff_lines.append((start_point, end_point, gap_size, category))
-    
-    print(f"Loaded {len(environment_lines)} environment lines and {len(breakoff_lines)} breakoff lines from test_env.txt")
-    
-    # Show intersection graph (graph only - clean structure)
-    print("Creating intersection graph visualization (graph only)...")
-    graph = show_intersection_graph(environment_lines, agent_x, agent_y, visibility_range, show_environment=False)
-    
+    # Load data using the enhanced loader function
+    print("📂 Loading environment and visibility data...")
+    try:
+        environment_lines, breakoff_lines, agent_x, agent_y, visibility_range, agent_orientation, visibility_polygon = load_environment_data('test_env2.txt', 'vis_test2.txt')
+        print(f"✅ Loaded {len(environment_lines)} environment lines and {len(breakoff_lines)} breakoff lines")
+        if (agent_x, agent_y) != (0.0, 0.0):
+            print(f"🤖 Agent position: ({agent_x}, {agent_y}), orientation: {math.degrees(agent_orientation):.2f}°")
+        if visibility_polygon is not None and len(visibility_polygon) > 0:
+            print(f"👁️ Visibility polygon: {len(visibility_polygon)} vertices")
+    except Exception as e:
+        print(f"❌ Failed to load data: {e}")
+        return
+
+    # Skip intersection graph visualization - only show paths
     # Run algorithm using the API - let the polygon_exploration module handle all processing
     print("Running polygon exploration algorithm...")
     # Convert environment_lines to the expected format for clipped_environment_lines
@@ -518,6 +753,83 @@ def show_visualization():
     paths, exploration_graph = pe.calculate_polygon_exploration_paths(
         test_breakoff_lines, agent_x, agent_y, visibility_range, clipped_environment_lines
     )
+    
+    # Use the new unified API to process both path analysis and reachability overlay
+    print("🔄 Processing path analysis and reachability overlay using unified API...")
+    reachability_data = None
+    sample_points_data = []  # Initialize outside try block for global access
+    try:
+        # Import the reachability mask API and timing module
+        from reachability_mask_min_api import ReachabilityMaskAPI
+        import time
+        
+        # Configuration constants for overlay
+        CLIP_PIXELS = 32.0
+        RESIZE_TARGET = (120, 120)
+        UPSCALE_TARGET = (400, 400)
+        DOWNSAMPLE_METHOD = 'max_pool'
+        # Probability weighting: None for no weighting, or (alpha, beta) for Prelect weighting
+        # Example: (0.88, 0.88) for typical Prelect parameters, (0.5, 1.5) for different risk attitudes
+        PROBABILITY_WEIGHTING = (0.55, 0.8)  # None to disable, (alpha, beta) to enable
+        
+        # Create overlay API instance
+        overlay_api = ReachabilityMaskAPI(filename_base="unicycle_grid")
+        
+        if overlay_api.is_loaded():
+            # STEP 1: Configure overlay (one-time setup) - TIMED
+            print("🔧 Configuring reachability overlay (one-time setup)...")
+            config_start_time = time.perf_counter()
+            overlay_configured = overlay_api.setup_overlay_configuration(
+                clip_pixels=CLIP_PIXELS,
+                resize_target=RESIZE_TARGET,
+                upscale_target=UPSCALE_TARGET,
+                downsample_method=DOWNSAMPLE_METHOD,
+                probability_weighting=PROBABILITY_WEIGHTING
+            )
+            config_end_time = time.perf_counter()
+            config_duration = config_end_time - config_start_time
+            print(f"⏱️ Overlay configuration took: {config_duration:.4f} seconds")
+            
+            if overlay_configured:
+                # STEP 2: Process paths with the configured overlay (per-iteration) - TIMED
+                print("🔄 Processing paths with pre-configured overlay...")
+                process_start_time = time.perf_counter()
+                path_analysis_data, reachability_data, sample_points_data = overlay_api.process_paths_with_reachability(
+                    paths=paths,
+                    agent_x=agent_x,
+                    agent_y=agent_y,
+                    agent_orientation=agent_orientation,
+                    visibility_range=visibility_range,
+                    visibility_polygon=visibility_polygon
+                )
+                process_end_time = time.perf_counter()
+                process_duration = process_end_time - process_start_time
+                
+                # Store timing data for later display
+                timing_data = {
+                    'config_duration': config_duration,
+                    'process_duration': process_duration,
+                    'total_duration': config_duration + process_duration
+                }
+            else:
+                print(f"⚠️ Failed to configure reachability overlay")
+                # Fallback: compute path analysis data without reachability overlay
+                path_analysis_data = []
+                sample_points_data = []
+                timing_data = None
+        else:
+            print(f"⚠️ Failed to load reachability data from unicycle_grid.pkl")
+            # Fallback: compute path analysis data without reachability overlay
+            path_analysis_data = []
+            sample_points_data = []
+            timing_data = None
+    except Exception as e:
+        print(f"⚠️ Could not load reachability overlay: {e}")
+        print(f"   Continuing without overlay...")
+        # Fallback: compute path analysis data without reachability overlay  
+        path_analysis_data = []
+        sample_points_data = []
+        timing_data = None
     
     # Extract data from API results for visualization
     intersections = []
@@ -560,7 +872,52 @@ def show_visualization():
     fig = plt.figure(figsize=(14, 10))
     ax = fig.add_subplot(111)
     ax.set_aspect('equal')
-    ax.set_title('Polygon Exploration - Algorithm Results (Use toolbar to zoom/pan)', fontsize=16)
+    ax.set_title('Polygon Exploration - Algorithm Results (Use toolbar to zoom/pan | Left-click+drag to measure)', fontsize=16)
+    
+    # Initialize ruler tool
+    ruler = RulerTool(ax)
+    
+    # Draw reachability heatmap overlay as transparent background if available
+    if reachability_data is not None:
+        reachability_mask, world_bounds = reachability_data
+        
+        # Extract world coordinate bounds from dictionary
+        if isinstance(world_bounds, dict):
+            # Transform bounds from reachability grid coordinates to world coordinates
+            grid_x_min = world_bounds['x_min']
+            grid_x_max = world_bounds['x_max'] 
+            grid_y_min = world_bounds['y_min']
+            grid_y_max = world_bounds['y_max']
+            
+            # Translate the bounds to be centered at the agent position
+            world_x_min = agent_x + grid_x_min
+            world_x_max = agent_x + grid_x_max
+            world_y_min = agent_y + grid_y_min
+            world_y_max = agent_y + grid_y_max
+        else:
+            # Fallback if bounds are in list/tuple format
+            world_x_min, world_y_min, world_x_max, world_y_max = world_bounds
+        
+        print(f"✅ Reachability overlay: {reachability_mask.shape[0]}×{reachability_mask.shape[1]} centered at agent ({agent_x:.1f}, {agent_y:.1f})")
+        
+        # Calculate the extent for the heatmap (centered on agent)
+        extent = [world_x_min, world_x_max, world_y_min, world_y_max]
+        
+        # Display the reachability heatmap as a transparent overlay
+        im = ax.imshow(reachability_mask, 
+                      extent=extent,
+                      origin='lower',  # Important: origin='lower' for correct orientation
+                      alpha=0.6,  # Transparent overlay
+                      cmap='hot',  # Heat colormap (red-yellow for high reachability)
+                      interpolation='bilinear',  # Smooth interpolation
+                      zorder=1,  # Draw behind other elements
+                      vmin=0.0,  # Set explicit value range
+                      vmax=1.0)
+        
+        # Add colorbar for reachability values
+        cbar = plt.colorbar(im, ax=ax, shrink=0.8, aspect=20)
+        cbar.set_label('Reachability', rotation=270, labelpad=20)
+        cbar.ax.tick_params(labelsize=10)
     
     # Draw environment
     for line in environment_lines:
@@ -573,6 +930,13 @@ def show_visualization():
     circle = patches.Circle((agent_x, agent_y), visibility_range, 
                            fill=False, color='blue', linestyle='--', alpha=0.8, linewidth=3, label='Visibility Range')
     ax.add_patch(circle)
+    
+    # Show agent orientation with an arrow
+    arrow_length = 30
+    arrow_x = agent_x + arrow_length * math.cos(agent_orientation)
+    arrow_y = agent_y + arrow_length * math.sin(agent_orientation)
+    ax.annotate('', xy=(arrow_x, arrow_y), xytext=(agent_x, agent_y),
+                arrowprops=dict(arrowstyle='->', color='red', lw=3))
     
     # Draw breakoff lines with better visibility and different colors
     # Show all breakoff lines in visualization
@@ -663,12 +1027,211 @@ def show_visualization():
                        alpha=0.9, markeredgewidth=3,
                        label='Incomplete Paths' if i == 0 else '')
     
+    # Draw first edges of each path with distinctive styling
+    print(f"🎨 Drawing {len(path_analysis_data)} path first edges...")
+    first_edge_colors = ['cyan', 'gold', 'lime', 'hotpink', 'turquoise', 'yellow', 'lightgreen', 'orange']
+    
+    for i, path_info in enumerate(path_analysis_data):
+        first_edge = path_info['first_edge']
+        if first_edge is None:
+            continue
+            
+        edge_color = first_edge_colors[i % len(first_edge_colors)]
+        
+        if first_edge['type'] == 'line':
+            # Draw first edge as thick highlighted line
+            start = first_edge['start']
+            end = first_edge['end']
+            ax.plot([start[0], end[0]], [start[1], end[1]], 
+                   color=edge_color, linewidth=6, alpha=0.8, linestyle='-',
+                   label=f'First Edge {i+1} (LINE)' if i < 8 else '')
+            
+            # Add start and end markers for first edge
+            ax.plot(start[0], start[1], 'o', color=edge_color, markersize=8, 
+                   markeredgecolor='black', markeredgewidth=2, alpha=0.9)
+            ax.plot(end[0], end[1], 'o', color=edge_color, markersize=8, 
+                   markeredgecolor='black', markeredgewidth=2, alpha=0.9)
+                   
+        elif first_edge['type'] == 'arc':
+            # Draw first edge as thick highlighted arc
+            center = first_edge.get('center', (agent_x, agent_y))
+            radius = first_edge.get('radius', visibility_range)
+            start_angle = first_edge.get('start_angle', 0)
+            end_angle = first_edge.get('end_angle', 0)
+            
+            # Handle angle wrapping
+            if end_angle < start_angle:
+                end_angle += 2 * math.pi
+            
+            # Create arc with points for smooth curves
+            num_points = max(10, int(abs(end_angle - start_angle) * 30))
+            angles = [start_angle + j * (end_angle - start_angle) / num_points for j in range(num_points + 1)]
+            arc_x = [center[0] + radius * math.cos(a) for a in angles]
+            arc_y = [center[1] + radius * math.sin(a) for a in angles]
+            
+            ax.plot(arc_x, arc_y, color=edge_color, linewidth=6, alpha=0.8, linestyle='-',
+                   label=f'First Edge {i+1} (ARC)' if i < 8 else '')
+            
+            # Add start and end markers for first edge arc
+            start = first_edge['start']
+            end = first_edge['end']
+            ax.plot(start[0], start[1], 'o', color=edge_color, markersize=8, 
+                   markeredgecolor='black', markeredgewidth=2, alpha=0.9)
+            ax.plot(end[0], end[1], 'o', color=edge_color, markersize=8, 
+                   markeredgecolor='black', markeredgewidth=2, alpha=0.9)
+        
+        # Add text annotation for first edge identification
+        if first_edge['start'] and first_edge['end']:
+            mid_x = (first_edge['start'][0] + first_edge['end'][0]) / 2
+            mid_y = (first_edge['start'][1] + first_edge['end'][1]) / 2
+            ax.annotate(f'1st-{i+1}', (mid_x, mid_y), 
+                       xytext=(5, 5), textcoords='offset points', 
+                       fontsize=10, fontweight='bold', color='white',
+                       bbox=dict(boxstyle='round,pad=0.3', facecolor=edge_color, alpha=0.8, edgecolor='black'),
+                       ha='center', va='center', zorder=20)
+    
+    # Draw orientation arrows for each path
+    print(f"🧭 Drawing orientation arrows for {len(path_analysis_data)} paths...")
+    for i, path_info in enumerate(path_analysis_data):
+        first_edge = path_info['first_edge']
+        orientation = path_info['orientation']
+        target_point = path_info['target_point']
+        
+        if first_edge is None or orientation is None or target_point is None:
+            continue
+            
+        # Calculate arrow start position (target point - second point of first edge)
+        arrow_start_x = target_point[0]
+        arrow_start_y = target_point[1]
+        
+        # Calculate arrow end position using orientation
+        arrow_length = 40  # Length of orientation arrow
+        arrow_end_x = arrow_start_x + arrow_length * math.cos(orientation)
+        arrow_end_y = arrow_start_y + arrow_length * math.sin(orientation)
+        
+        # Use same color as first edge but make it darker for contrast
+        edge_color = first_edge_colors[i % len(first_edge_colors)]
+        arrow_color = edge_color
+        
+        # Draw orientation arrow
+        ax.annotate('', xy=(arrow_end_x, arrow_end_y), xytext=(arrow_start_x, arrow_start_y),
+                   arrowprops=dict(arrowstyle='->', color=arrow_color, lw=4, alpha=0.9),
+                   zorder=25)
+        
+        # Add small circle at arrow start for clarity
+        ax.plot(arrow_start_x, arrow_start_y, 'o', color=arrow_color, markersize=6, 
+               markeredgecolor='black', markeredgewidth=1, alpha=0.9, zorder=24)
+        
+        # Add orientation degree text near arrow end
+        orientation_deg = math.degrees(orientation)
+        ax.annotate(f'{orientation_deg:.0f}°', (arrow_end_x, arrow_end_y), 
+                   xytext=(8, 8), textcoords='offset points', 
+                   fontsize=9, fontweight='bold', color=arrow_color,
+                   bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.8, edgecolor=arrow_color),
+                   ha='center', va='center', zorder=26)
+    
+    # Draw sample points where reachability values were sampled
+    if sample_points_data:
+        print(f"📍 Drawing sample points for {len(sample_points_data)} paths...")
+        for i, sample_info in enumerate(sample_points_data):
+            sample_x, sample_y = sample_info['sample_point']
+            target_value = sample_info['target_value']
+            
+            # Calculate boosted value (50% increase, capped at 1.0) to match processing
+            boosted_value = min(1.0, target_value * 1.5)
+            
+            # Choose color based on boosted value (heat map style)
+            if boosted_value > 0.7:
+                sample_color = 'red'
+            elif boosted_value > 0.4:
+                sample_color = 'orange'
+            elif boosted_value > 0.1:
+                sample_color = 'yellow'
+            else:
+                sample_color = 'lightblue'
+            
+            # Draw sample point with distinctive marker
+            ax.plot(sample_x, sample_y, 'D', color=sample_color, markersize=12, 
+                   markeredgecolor='black', markeredgewidth=2, alpha=0.9, zorder=30)
+            
+            # Add sample value annotation
+            ax.annotate(f'{target_value:.2f}→{boosted_value:.2f}', 
+                       (sample_x, sample_y), 
+                       xytext=(15, -15), textcoords='offset points', 
+                       fontsize=8, fontweight='bold', color='black',
+                       bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.9, edgecolor='black'),
+                       ha='center', va='center', zorder=31)
+    
+    # Draw polygon paths for each path
+    print(f"🔷 Drawing polygon paths for {len(path_analysis_data)} paths...")
+    polygon_colors = ['lightcyan', 'lightyellow', 'lightgreen', 'lightpink', 'lightblue', 'lavender', 'wheat', 'mistyrose']
+    
+    for i, path_info in enumerate(path_analysis_data):
+        path_polygon = path_info['path_polygon']
+        if path_polygon is None or len(path_polygon) < 3:
+            continue  # Need at least 3 points to form a polygon
+            
+        polygon_color = polygon_colors[i % len(polygon_colors)]
+        
+        # Extract x and y coordinates
+        polygon_x = [point[0] for point in path_polygon]
+        polygon_y = [point[1] for point in path_polygon]
+        
+        # Draw filled polygon with transparency
+        ax.fill(polygon_x, polygon_y, color=polygon_color, alpha=0.3, 
+               edgecolor='black', linewidth=1, linestyle=':', 
+               label=f'Path {i+1} Polygon (Linearized)' if i < 8 else '')
+        
+        # Draw polygon vertices as small dots
+        # Different markers for original vs linearized points
+        original_points = paths[i].get('path_points', [])
+        
+        for j, point in enumerate(path_polygon):
+            # Check if this point is close to any original point (within small tolerance)
+            is_original = False
+            for orig_point in original_points:
+                distance = math.sqrt((point[0] - orig_point[0])**2 + (point[1] - orig_point[1])**2)
+                if distance < 1e-6:  # Small tolerance for floating point comparison
+                    is_original = True
+                    break
+            
+            if is_original:
+                # Original path points - larger, darker dots
+                ax.plot(point[0], point[1], 'o', color='darkblue', markersize=4, 
+                       alpha=0.9, markeredgecolor='black', markeredgewidth=1)
+            else:
+                # Linearization points - smaller, lighter dots
+                ax.plot(point[0], point[1], 'o', color='lightgray', markersize=2, 
+                       alpha=0.7, markeredgecolor='gray', markeredgewidth=0.5)
+        
+        # Add polygon vertex count annotation near the polygon centroid
+        if len(path_polygon) > 0:
+            # Calculate centroid
+            centroid_x = sum(polygon_x) / len(polygon_x)
+            centroid_y = sum(polygon_y) / len(polygon_y)
+            
+            ax.annotate(f'{len(path_polygon)} pts', (centroid_x, centroid_y), 
+                       xytext=(0, 0), textcoords='offset points', 
+                       fontsize=8, fontweight='bold', color='darkblue',
+                       bbox=dict(boxstyle='round,pad=0.2', facecolor=polygon_color, alpha=0.8, edgecolor='darkblue'),
+                       ha='center', va='center', zorder=15)
+    
     ax.legend()
     ax.grid(True, alpha=0.3)
     
     # Force window to front
     fig.canvas.manager.window.wm_attributes('-topmost', 1)
     fig.canvas.manager.window.wm_attributes('-topmost', 0)
+    
+    # Set up window close event handler
+    def on_close(event):
+        """Handle window close event."""
+        print("\nWindow closed. Shutting down program...")
+        ruler.disconnect()  # Clean up ruler event handlers
+        plt.close('all')
+        exit(0)
+    
+    fig.canvas.mpl_connect('close_event', on_close)
     
     plt.tight_layout()
     plt.draw()
@@ -682,14 +1245,30 @@ def show_visualization():
     print(f"Loaded {len(breakoff_lines)} total breakoff lines") 
     print(f"USING ALL {len(test_breakoff_lines)} breakoff lines for polygon exploration")
     print(f"Generated {len(paths)} exploration paths")
+    print(f"Analyzed {len(path_analysis_data)} path first edges")
+    
+    # Display timing information at the end
+    if 'timing_data' in locals() and timing_data is not None:
+        print("")
+        print("REACHABILITY PROCESSING TIMING:")
+        print(f"⏱️ Configuration: {timing_data['config_duration']:.4f} seconds")
+        print(f"⏱️ Path processing: {timing_data['process_duration']:.4f} seconds")
+        print(f"⏱️ Total reachability processing: {timing_data['total_duration']:.4f} seconds")
+        print(f"📊 Breakdown: Config={timing_data['config_duration']:.4f}s ({timing_data['config_duration']/timing_data['total_duration']*100:.1f}%), Processing={timing_data['process_duration']:.4f}s ({timing_data['process_duration']/timing_data['total_duration']*100:.1f}%)")
+    
     print("")
     
     completed_paths = sum(1 for path in paths if path.get('completed', False))
     incomplete_paths = len(paths) - completed_paths
     
+    # Count first edge types
+    line_first_edges = sum(1 for info in path_analysis_data if info['first_edge'] and info['first_edge']['type'] == 'line')
+    arc_first_edges = sum(1 for info in path_analysis_data if info['first_edge'] and info['first_edge']['type'] == 'arc')
+    
     print(f"Path Results:")
     print(f"  ✓ Completed paths: {completed_paths}")
     print(f"  ✗ Incomplete paths: {incomplete_paths}")
+    print(f"  📏 First edges - Lines: {line_first_edges}, Arcs: {arc_first_edges}")
     print("")
     
     for i, path_data in enumerate(paths):
@@ -699,12 +1278,23 @@ def show_visualization():
         status = "✓ Complete" if path_data.get('completed', False) else "✗ Incomplete"
         iterations = path_data.get('iterations', 'Unknown')
         
-        print(f"Path {i+1}: {status} | {point_count} points | {iterations} iterations | Category: {category}")
+        # Add first edge info if available
+        first_edge_info = ""
+        orientation_info = ""
+        if i < len(path_analysis_data):
+            if path_analysis_data[i]['first_edge']:
+                edge_type = path_analysis_data[i]['first_edge']['type'].upper()
+                first_edge_info = f" | 1st edge: {edge_type}"
+            
+            if path_analysis_data[i]['orientation'] is not None:
+                orientation_deg = math.degrees(path_analysis_data[i]['orientation'])
+                orientation_info = f" | Orientation: {orientation_deg:.0f}°"
+        
+        print(f"Path {i+1}: {status} | {point_count} points | {iterations} iterations | Category: {category}{first_edge_info}{orientation_info}")
     
     print("\n" + "=" * 80)
-    print("TWO WINDOWS SHOULD BE VISIBLE NOW!")
-    print("1. Intersection Graph (graph only) - Shows clean graph structure")
-    print("2. Algorithm Results - Shows ALL exploration paths")
+    print("REACHABILITY PATH VISUALIZATION IS NOW VISIBLE!")
+    print("Shows ALL exploration paths and algorithm results")
     print("") 
     print("NAVIGATION TIPS:")
     print("- Use the toolbar buttons to zoom and pan")
@@ -713,26 +1303,35 @@ def show_visualization():
     print("- Home: Click home button to reset view")
     print("- Right-click and drag to zoom out")
     print("")
-    print("GRAPH LEGEND:")
-    print("- Lime circles: Line-circle intersections (on visibility circle only)")
-    print("- Orange diamonds: Line-line intersections (environment line crossings only)")
-    print("- Purple stars: Unified nodes (both line-circle & line-line intersections)")
-    print("- Red lines: Line edges (connecting intersections along environment lines)")
-    print("- Blue arcs: Arc edges (connecting intersections along visibility circle)")
+    print("RULER TOOL:")
+    print("- Left-click and drag to measure distances")
+    print("- Press 'r' to clear ruler measurements")
+    print("- Press 'h' for ruler help")
+    print("- Measurements are displayed as yellow text boxes")
     print("")
     print("ALGORITHM LEGEND:")
     print("- Green lines: Breakoff lines (multiple, between consecutive intersections)")
     print("- Purple/Magenta lines: Exploration paths (one per breakoff line)")
+    print("- Cyan/Gold/Lime thick lines: First edges of each path")
+    print("- Colored arrows: Path orientations (45° rotation away from circle center)")
+    print("- Light colored polygons: Path polygons (linearized arcs for accurate shape)")
+    print("- Dark blue dots: Original path points")
+    print("- Light gray dots: Arc linearization points")
     print("- Red squares: Path start points")
     print("- Blue squares: Completed path end points")
     print("- Orange X: Incomplete path end points")
     print("")
-    print("If you don't see the windows, try Alt+Tab to find them")
-    print("Press Enter to close both windows...")
+    print("If you don't see the window, try Alt+Tab to find it")
+    print("Close the window to exit the program...")
     print("=" * 80)
     
-    input()  # Wait for user input
-    plt.close('all')
+    # Keep the program running until the window is closed
+    try:
+        while plt.get_fignums():  # Check if any figures are still open
+            plt.pause(0.1)  # Small pause to prevent busy waiting
+    except KeyboardInterrupt:
+        print("\nProgram interrupted. Shutting down...")
+        plt.close('all')
 
 if __name__ == "__main__":
     show_visualization()

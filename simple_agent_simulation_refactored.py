@@ -56,13 +56,91 @@ from risk_calculator import (load_reachability_mask, calculate_evader_analysis, 
                             get_reachability_probabilities_for_fixed_grid, calculate_evader_visibility, 
                             get_visibility_statistics, calculate_visibility_sectors, detect_visibility_breakoff_points)
 
+# Import reachability mask API for overlay processing
+from reachability_mask_min_api import ReachabilityMaskAPI
+
 # Global variables to cache strategic analysis results
 cached_worst_nodes = {}
+
+# Global overlay API instance for reachability processing
+overlay_api = None
+overlay_configured = False
 
 def get_worst_pursuit_nodes():
     """Get the RRT nodes with the worst (lowest) time advantages for Agent 1 as the pursuer."""
     global cached_worst_nodes
     return cached_worst_nodes.copy()
+
+def initialize_overlay_api():
+    """Initialize and configure the reachability overlay API."""
+    global overlay_api, overlay_configured
+    
+    # Configuration constants for overlay (based on reachability_path_viewer.py)
+    CLIP_PIXELS = 32.0
+    RESIZE_TARGET = (120, 120)
+    UPSCALE_TARGET = (400, 400)
+    DOWNSAMPLE_METHOD = 'max_pool'
+    # Probability weighting: None for no weighting, or (alpha, beta) for Prelect weighting
+    # Example: (0.88, 0.88) for typical Prelect parameters, (0.5, 1.5) for different risk attitudes
+    PROBABILITY_WEIGHTING = (0.55, 0.8)  # None to disable, (alpha, beta) to enable
+    
+    try:
+        print("🔧 Initializing reachability overlay API...")
+        
+        # Create overlay API instance
+        overlay_api = ReachabilityMaskAPI(filename_base="unicycle_grid")
+        
+        if overlay_api.is_loaded():
+            print("✅ Overlay API loaded successfully")
+            
+            # STEP 1: Configure overlay (one-time setup) - TIMED
+            print("🔧 Configuring reachability overlay (one-time setup)...")
+            config_start_time = time.perf_counter()
+            overlay_configured = overlay_api.setup_overlay_configuration(
+                clip_pixels=CLIP_PIXELS,
+                resize_target=RESIZE_TARGET,
+                upscale_target=UPSCALE_TARGET,
+                downsample_method=DOWNSAMPLE_METHOD,
+                probability_weighting=PROBABILITY_WEIGHTING
+            )
+            config_end_time = time.perf_counter()
+            config_duration = config_end_time - config_start_time
+            print(f"⏱️ Overlay configuration took: {config_duration:.4f} seconds")
+            
+            if overlay_configured:
+                print("✅ Overlay API configured successfully and ready for path processing")
+                print(f"   📐 Clip pixels: {CLIP_PIXELS}")
+                print(f"   📏 Resize target: {RESIZE_TARGET}")
+                print(f"   📈 Upscale target: {UPSCALE_TARGET}")
+                print(f"   🔧 Downsample method: {DOWNSAMPLE_METHOD}")
+                print(f"   ⚖️ Probability weighting: {PROBABILITY_WEIGHTING}")
+            else:
+                print("⚠️ Failed to configure reachability overlay")
+                overlay_api = None
+        else:
+            print("❌ Failed to load reachability data from unicycle_grid.pkl")
+            overlay_api = None
+            
+    except ImportError:
+        print("⚠️ Could not import ReachabilityMaskAPI - reachability overlay not available")
+        overlay_api = None
+        overlay_configured = False
+    except Exception as e:
+        print(f"⚠️ Error initializing overlay API: {e}")
+        overlay_api = None
+        overlay_configured = False
+    
+    return overlay_api, overlay_configured
+
+def get_overlay_api():
+    """Get the global overlay API instance."""
+    global overlay_api
+    return overlay_api
+
+def is_overlay_configured():
+    """Check if the overlay API is configured and ready for use."""
+    global overlay_configured
+    return overlay_configured
 
 def update_worst_pursuit_nodes():
     """Update the cached worst pursuit nodes by running the analysis."""
@@ -146,7 +224,7 @@ def update_worst_pursuit_nodes():
 def handle_key_events(event, show_info, show_map_graph, show_rrt_trees, show_reachability_mask, 
                      show_evader_visibility, mask_data, map_graph_loaded, selected_node, 
                      selected_agent_id, path_to_selected, visibility_range, evader_analysis=None, 
-                     agent2=None, environment=None):
+                     agent2=None, environment=None, show_measurement_tool=False):
     """Handle keyboard events and return updated state variables."""
     global cached_worst_nodes
     
@@ -210,6 +288,13 @@ def handle_key_events(event, show_info, show_map_graph, show_rrt_trees, show_rea
             print("    🟠 Orange paths = incomplete exploration paths (hit iteration limit)")
             print("    🟡 Yellow circles = starting points of all exploration paths")
             print("    ⚪ White-centered circles = ending points, colored to match their path")
+            print("🎯 REACHABILITY OVERLAY (if available):")
+            print("    🔥 Hot colormap heatmap = reachability values (red=high, yellow=medium, black=low)")
+            print("    🎨 Thick colored lines = first edges of exploration paths (cyan, gold, lime, etc.)")
+            print("    🧭 Colored arrows = path orientations (45° rotation away from circle center)")
+            print("    💎 Diamond markers = sample points where reachability was evaluated")
+            print("    📊 Value annotations = original→boosted reachability values (50% boost, capped at 1.0)")
+            print("    ⚡ Processed through unified overlay API for accurate reachability analysis")
             
             # Show clipping statistics if evader analysis is available
             if evader_analysis and evader_analysis.clipping_statistics:
@@ -276,6 +361,41 @@ def handle_key_events(event, show_info, show_map_graph, show_rrt_trees, show_rea
             print(f"📄 Saved environment lines to: {filename}")
         else:
             print("❌ No evader analysis data available. Enable visibility (V key) first.")
+    elif event.key == pygame.K_k:
+        # Save current visibility polygon to file
+        if evader_analysis and hasattr(evader_analysis, 'visibility_boundary_polygon'):
+            from risk_calculator import save_visibility_polygon_to_file
+            import time
+            
+            # Generate filename with timestamp
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            filename = f"visibility_polygon_{timestamp}.txt"
+            
+            save_visibility_polygon_to_file(evader_analysis, filename)
+            print(f"📐 Saved visibility polygon to: {filename}")
+        else:
+            print("❌ No visibility polygon data available. Enable visibility (V key) first.")
+    elif event.key == pygame.K_q:
+        show_measurement_tool = not show_measurement_tool
+        print(f"📏 Measurement tool: {'ON' if show_measurement_tool else 'OFF'}")
+        if show_measurement_tool:
+            print("📐 Click and drag to measure distances")
+            print("   🖱️  Left click: Start measurement")
+            print("   🖱️  Drag: Show real-time distance")
+            print("   🖱️  Release: Complete measurement and show final distance")
+            print("   📊 Distance shown in pixels and approximate world units")
+            print("   ❌ Press Q again to disable measurement tool")
+        return {
+            'show_info': show_info,
+            'show_map_graph': show_map_graph,
+            'show_rrt_trees': show_rrt_trees,
+            'show_reachability_mask': show_reachability_mask,
+            'show_evader_visibility': show_evader_visibility,
+            'show_measurement_tool': show_measurement_tool,
+            'selected_node': selected_node,
+            'selected_agent_id': selected_agent_id,
+            'path_to_selected': path_to_selected
+        }
     
     return {
         'show_info': show_info,
@@ -754,6 +874,14 @@ def main():
     else:
         print("Reachability mask not available - run heatmap.py first")
     
+    # Initialize overlay API for reachability processing
+    print("Initializing overlay API...")
+    overlay_api_instance, overlay_ready = initialize_overlay_api()
+    if overlay_ready:
+        print("🎯 Overlay API is ready for path processing with reachability analysis")
+    else:
+        print("⚠️ Overlay API not available - path processing will work without reachability overlay")
+    
     # Initialize state variables
     clock = pygame.time.Clock()
     running = True
@@ -764,6 +892,12 @@ def main():
     show_rrt_trees = DEFAULT_DISPLAY_STATE['show_rrt_trees']
     show_trajectory = DEFAULT_DISPLAY_STATE['show_trajectory']
     show_reachability_mask = DEFAULT_DISPLAY_STATE['show_reachability_mask']
+    
+    # Measurement tool state
+    show_measurement_tool = False
+    measurement_start_pos = None
+    measurement_end_pos = None
+    measuring = False
     
     # Visibility state
     show_evader_visibility = DEFAULT_VISIBILITY_STATE['show_evader_visibility']
@@ -803,7 +937,7 @@ def main():
                                          mask_data, 
                                          map_graph_loaded, selected_node, selected_agent_id, 
                                          path_to_selected, visibility_range, evader_analysis, 
-                                         agent2, environment)
+                                         agent2, environment, show_measurement_tool)
                 
                 if result.get('quit'):
                     running = False
@@ -814,6 +948,7 @@ def main():
                     show_rrt_trees = result.get('show_rrt_trees', show_rrt_trees)
                     show_reachability_mask = result.get('show_reachability_mask', show_reachability_mask)
                     show_evader_visibility = result.get('show_evader_visibility', show_evader_visibility)
+                    show_measurement_tool = result.get('show_measurement_tool', show_measurement_tool)
                     selected_node = result.get('selected_node', selected_node)
                     selected_agent_id = result.get('selected_agent_id', selected_agent_id)
                     path_to_selected = result.get('path_to_selected', path_to_selected)
@@ -824,38 +959,69 @@ def main():
                     
                     # Only search for nodes in the environment area (not sidebar)
                     if mouse_x < ENVIRONMENT_WIDTH:
-                        # Try to find RRT nodes near the click position for trajectory visualization
-                        for agent_id in ["agent1", "agent2"]:
-                            node = find_node_at_position(agent_id, mouse_x, mouse_y, tolerance=15.0)
-                            if node:
-                                selected_node = node
-                                selected_agent_id = agent_id
-                                path_to_selected = get_path_to_node(agent_id, node)
-                                print(f"Selected RRT node in {agent_id} tree at ({node.x:.1f}, {node.y:.1f})")
-                                print(f"Path has {len(path_to_selected)} nodes, cost: {node.cost:.2f}")
-                                
-                                # Automatically generate optimized trajectory asynchronously
-                                print(f"Starting async trajectory generation for {agent_id} with {len(path_to_selected)} nodes...")
-                                
-                                def trajectory_callback(result, agent_id):
-                                    if result:
-                                        print(f"Async trajectory generation completed for {agent_id}!")
-                                    else:
-                                        print(f"Async trajectory generation failed for {agent_id}")
-                                
-                                trajectory_calculator = get_trajectory_calculator()
-                                trajectory_calculator.generate_trajectory_async(
-                                    path_to_selected, agent_id, num_points=TRAJECTORY_NUM_POINTS, callback=trajectory_callback
-                                )
-                                break
+                        if show_measurement_tool:
+                            # Start measurement
+                            measurement_start_pos = (mouse_x, mouse_y)
+                            measurement_end_pos = (mouse_x, mouse_y)
+                            measuring = True
+                            print(f"📏 Starting measurement at ({mouse_x}, {mouse_y})")
                         else:
-                            # No RRT node found - clear any existing selection
-                            if selected_node:
-                                selected_node = None
-                                selected_agent_id = None
-                                path_to_selected = []
-                                clear_trajectory()
-                                print("No RRT node found at click position - path and trajectory cleared")
+                            # Try to find RRT nodes near the click position for trajectory visualization
+                            for agent_id in ["agent1", "agent2"]:
+                                node = find_node_at_position(agent_id, mouse_x, mouse_y, tolerance=15.0)
+                                if node:
+                                    selected_node = node
+                                    selected_agent_id = agent_id
+                                    path_to_selected = get_path_to_node(agent_id, node)
+                                    print(f"Selected RRT node in {agent_id} tree at ({node.x:.1f}, {node.y:.1f})")
+                                    print(f"Path has {len(path_to_selected)} nodes, cost: {node.cost:.2f}")
+                                    
+                                    # Automatically generate optimized trajectory asynchronously
+                                    print(f"Starting async trajectory generation for {agent_id} with {len(path_to_selected)} nodes...")
+                                    
+                                    def trajectory_callback(result, agent_id):
+                                        if result:
+                                            print(f"Async trajectory generation completed for {agent_id}!")
+                                        else:
+                                            print(f"Async trajectory generation failed for {agent_id}")
+                                    
+                                    trajectory_calculator = get_trajectory_calculator()
+                                    trajectory_calculator.generate_trajectory_async(
+                                        path_to_selected, agent_id, num_points=TRAJECTORY_NUM_POINTS, callback=trajectory_callback
+                                    )
+                                    break
+                            else:
+                                # No RRT node found - clear any existing selection
+                                if selected_node:
+                                    selected_node = None
+                                    selected_agent_id = None
+                                    path_to_selected = []
+                                    clear_trajectory()
+                                    print("No RRT node found at click position - path and trajectory cleared")
+            
+            elif event.type == pygame.MOUSEBUTTONUP:
+                if event.button == 1 and measuring:  # Left mouse button release
+                    mouse_x, mouse_y = event.pos
+                    if mouse_x < ENVIRONMENT_WIDTH and measurement_start_pos:
+                        measurement_end_pos = (mouse_x, mouse_y)
+                        measuring = False
+                        
+                        # Calculate and display final distance
+                        dx = measurement_end_pos[0] - measurement_start_pos[0]
+                        dy = measurement_end_pos[1] - measurement_start_pos[1]
+                        distance = math.sqrt(dx * dx + dy * dy)
+                        world_distance = distance * 0.1  # Approximate world units
+                        
+                        print(f"📏 Measurement complete:")
+                        print(f"   📍 From: ({measurement_start_pos[0]}, {measurement_start_pos[1]})")
+                        print(f"   📍 To: ({measurement_end_pos[0]}, {measurement_end_pos[1]})")
+                        print(f"   📊 Distance: {distance:.1f} pixels ({world_distance:.1f} world units)")
+            
+            elif event.type == pygame.MOUSEMOTION:
+                if measuring and measurement_start_pos:
+                    mouse_x, mouse_y = event.pos
+                    if mouse_x < ENVIRONMENT_WIDTH:
+                        measurement_end_pos = (mouse_x, mouse_y)
             
             elif event.type == pygame.MOUSEWHEEL:
                 # Handle mouse wheel scrolling in the info panel
@@ -898,7 +1064,8 @@ def main():
                 walls=environment.get_all_walls(),
                 mask_data=mask_data,  # Always pass mask_data when available for projected heatmap
                 num_rays=VISIBILITY_NUM_RAYS,
-                spatial_index=spatial_index
+                spatial_index=spatial_index,
+                overlay_api=get_overlay_api()  # Pass the overlay API instance
             )
             last_evader_analysis_update = current_time
         
@@ -965,9 +1132,34 @@ def main():
                 agent_theta=agent2.state[2]
             )
             
+
+            
             # Draw visibility boundary polygon if it exists
             if hasattr(evader_analysis, 'visibility_boundary_polygon') and evader_analysis.visibility_boundary_polygon:
                 draw_visibility_boundary_polygon(screen, evader_analysis.visibility_boundary_polygon)
+            
+            # Draw visibility bounding box (always shown when visibility is enabled)
+            if hasattr(evader_analysis, 'visibility_bounding_box') and evader_analysis.visibility_bounding_box:
+                bbox = evader_analysis.visibility_bounding_box
+                bbox_rect = pygame.Rect(bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1])
+                bbox_color = (255, 255, 0)  # Yellow
+                pygame.draw.rect(screen, bbox_color, bbox_rect, 2)
+            
+            # Highlight map graph nodes within bounding box and visibility circle
+            if map_graph_loaded and hasattr(evader_analysis, 'highlighted_nodes') and evader_analysis.highlighted_nodes:
+                highlighted_nodes = evader_analysis.highlighted_nodes
+                
+                # Colors for highlighting nodes
+                bbox_node_color = (255, 165, 0)  # Orange for nodes in bounding box
+                circle_node_color = (0, 255, 255)  # Cyan for nodes in visibility circle
+                
+                # Draw nodes in visibility circle (higher priority)
+                for node_idx, node_x, node_y in highlighted_nodes.get('circle_nodes', []):
+                    pygame.draw.circle(screen, circle_node_color, (int(node_x), int(node_y)), 3, 2)
+                
+                # Draw nodes only in bounding box
+                for node_idx, node_x, node_y in highlighted_nodes.get('bbox_nodes', []):
+                    pygame.draw.circle(screen, bbox_node_color, (int(node_x), int(node_y)), 3, 2)
             
             # Draw clipped environment objects to show what's being processed (optional debug visualization)
             if DRAW_CLIPPED_WALLS:
@@ -989,11 +1181,24 @@ def main():
             # Draw polygon exploration paths if they exist
             if hasattr(evader_analysis, 'polygon_exploration_paths') and evader_analysis.polygon_exploration_paths:
                 draw_polygon_exploration_paths(screen, evader_analysis.polygon_exploration_paths)
+                
+                # Draw path links if they exist
+                if hasattr(evader_analysis, 'path_links') and evader_analysis.path_links:
+                    from simulation_drawing import draw_path_links
+                    draw_path_links(screen, evader_analysis.path_links)
             
-            # Draw projected heatmap at map graph nodes if they exist
-            if (hasattr(evader_analysis, 'projected_heatmap_nodes') and 
-                evader_analysis.projected_heatmap_nodes):
-                draw_projected_heatmap_nodes(screen, evader_analysis.projected_heatmap_nodes)
+            # Draw reachability overlay data if available (from overlay API processing)
+            if hasattr(evader_analysis, 'reachability_overlay_data') and evader_analysis.reachability_overlay_data:
+                draw_reachability_overlay(screen, evader_analysis.reachability_overlay_data, 
+                                        agent2.state[0], agent2.state[1])
+            
+            # Draw path analysis data (first edges, orientations, etc.)
+            if hasattr(evader_analysis, 'path_analysis_data') and evader_analysis.path_analysis_data:
+                draw_path_analysis_data(screen, evader_analysis.path_analysis_data)
+            
+            # Draw sample points where reachability values were evaluated
+            if hasattr(evader_analysis, 'sample_points_data') and evader_analysis.sample_points_data:
+                draw_sample_points(screen, evader_analysis.sample_points_data)
         
         # Draw map graph if enabled and loaded
         if show_map_graph and map_graph_loaded:
@@ -1065,6 +1270,10 @@ def main():
         elif show_reachability_mask and mask_data is not None:
             # Fallback for when evader analysis isn't active but mask display is requested
             draw_reachability_grid_overlay(screen, mask_data, agent2.state[0], agent2.state[1], agent2.state[2])
+        
+        # Draw measurement tool
+        if show_measurement_tool and measurement_start_pos and measurement_end_pos:
+            draw_measurement_line(screen, measurement_start_pos, measurement_end_pos, font)
         
         # Draw agents on top of everything
         draw_agent(screen, agent1, AGENT_COLOR, "Agent 1", font)

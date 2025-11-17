@@ -413,5 +413,13 @@ def print_startup_help():
         print(line)
     print("")
     
+    for line in CONTROL_HELP_TEXT['measurement_help']:
+        print(line)
+    print("")
+    
+    for line in CONTROL_HELP_TEXT['overlay_api_help']:
+        print(line)
+    print("")
+    
     for line in CONTROL_HELP_TEXT['node_visualization_help']:
         print(line)
